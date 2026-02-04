@@ -89,10 +89,16 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -R artifacts
 
+      - name: Prepare release files
+        run: |
+          mkdir -p release-files
+          find artifacts -type f -exec cp {} release-files/ \;
+          ls -lh release-files/
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: release-files/*
           draft: false
           prerelease: false
           generate_release_notes: true
