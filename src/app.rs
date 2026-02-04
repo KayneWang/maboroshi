@@ -37,6 +37,7 @@ pub struct App {
     pub play_mode: PlayMode,
     pub search_results: Vec<SearchResult>,
     pub selected_search_result: usize,
+    pub saved_status: Option<PlayerStatus>,
 }
 
 impl App {
@@ -85,6 +86,7 @@ impl App {
             play_mode: PlayMode::ListLoop,
             search_results: Vec::new(),
             selected_search_result: 0,
+            saved_status: None,
         }
     }
 
@@ -117,6 +119,22 @@ impl App {
 
     pub fn is_favorite(&self) -> bool {
         self.favorites.contains(&self.current_song)
+    }
+
+    pub fn toggle_favorite_from_search_result(&mut self) {
+        if let Some(result) = self.get_selected_search_result() {
+            let title = result.title.clone();
+
+            if let Some(pos) = self.favorites.iter().position(|s| s == &title) {
+                self.favorites.remove(pos);
+                self.add_log(format!("取消收藏: {}", title));
+            } else {
+                self.favorites.push(title.clone());
+                self.add_log(format!("已收藏: {}", title));
+            }
+
+            Self::save_favorites(&self.favorites);
+        }
     }
 
     pub fn select_next_favorite(&mut self) {
@@ -184,6 +202,29 @@ impl App {
     pub fn clear_search_results(&mut self) {
         self.search_results.clear();
         self.selected_search_result = 0;
+    }
+
+    pub fn save_status_before_search(&mut self) {
+        if !matches!(
+            self.status,
+            PlayerStatus::Searching | PlayerStatus::SearchResults
+        ) {
+            self.saved_status = Some(match &self.status {
+                PlayerStatus::Playing => PlayerStatus::Playing,
+                PlayerStatus::Paused => PlayerStatus::Paused,
+                PlayerStatus::Waiting => PlayerStatus::Waiting,
+                PlayerStatus::Error(e) => PlayerStatus::Error(e.clone()),
+                _ => PlayerStatus::Waiting,
+            });
+        }
+    }
+
+    pub fn restore_status_after_search(&mut self) {
+        if let Some(saved) = self.saved_status.take() {
+            self.status = saved;
+        } else {
+            self.status = PlayerStatus::Waiting;
+        }
     }
 
     pub fn toggle_play_mode(&mut self) {

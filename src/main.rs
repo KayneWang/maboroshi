@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
                             }
                             KeyCode::Esc => {
                                 app_lock.clear_search_results();
-                                app_lock.status = PlayerStatus::Waiting;
+                                app_lock.restore_status_after_search();
                                 app_lock.add_log("取消搜索结果".to_string());
                             }
                             KeyCode::Up => {
@@ -142,6 +142,9 @@ async fn main() -> Result<()> {
                                 drop(app_lock);
                                 player.play_selected_result().await;
                                 continue;
+                            }
+                            KeyCode::Char('f') => {
+                                app_lock.toggle_favorite_from_search_result();
                             }
                             _ => {}
                         }

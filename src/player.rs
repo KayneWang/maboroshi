@@ -15,6 +15,7 @@ impl Player {
 
     pub async fn search(&self, keyword: String) {
         let mut app_lock = self.app.lock().await;
+        app_lock.save_status_before_search();
         app_lock.status = PlayerStatus::Searching;
         app_lock.clear_search_results();
         drop(app_lock);

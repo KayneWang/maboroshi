@@ -88,7 +88,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .block(
                 Block::default()
                     .title(format!(
-                        "🎯 搜索结果 ({}) - ↑↓ 选择 | Enter 播放",
+                        "🎯 搜索结果 ({}) - ↑↓ 选择 | Enter 播放 | 'f' 收藏",
                         app.search_results.len()
                     ))
                     .borders(Borders::ALL),

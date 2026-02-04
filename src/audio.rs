@@ -166,7 +166,7 @@ impl AudioBackend {
             cached_url
         } else {
             // 2. 缓存未命中，执行搜索
-            log_fn(format!("缓存未命中，开始搜索: {}", keyword));
+            log_fn(format!("开始搜索: {}", keyword));
             let yt_task = Command::new("yt-dlp")
                 .env("PATH", &path)
                 .args([
