@@ -1,7 +1,14 @@
 [package]
 name = "maboroshi"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["Kayne <w.zengkai@gmail.com>"]
+description = "A lightweight terminal-based music player powered by YouTube"
+license = "MIT"
+repository = "https://github.com/KayneWang/maboroshi"
+keywords = ["music", "player", "tui", "youtube", "terminal"]
+categories = ["command-line-utilities", "multimedia"]
+readme = "README.md"
 
 [dependencies]
 ratatui = "0.26.1"

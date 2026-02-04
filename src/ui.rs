@@ -1,10 +1,10 @@
 use crate::app::App;
 use crate::app::PlayerStatus;
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph},
+    Frame,
 };
 
 pub fn render(app: &mut App, frame: &mut Frame) {
@@ -23,7 +23,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let title = Paragraph::new(title_text).block(Block::default().borders(Borders::ALL));
     frame.render_widget(title, chunks[0]);
 
-    // 播放状态和进度条（单行显示）
     let status_text = match &app.status {
         PlayerStatus::Waiting => {
             if app.favorites.is_empty() {
@@ -67,9 +66,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     frame.render_widget(gauge, chunks[1]);
 
-    // 列表区域：搜索结果或收藏列表（全宽显示）
+    // 列表区域：搜索结果或收藏列表
     if matches!(app.status, PlayerStatus::SearchResults) && !app.search_results.is_empty() {
-        // 显示搜索结果
         let search_items: Vec<ListItem> = app
             .search_results
             .iter()
@@ -110,13 +108,18 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .favorites
             .iter()
             .enumerate()
-            .map(|(_i, song)| {
+            .map(|(i, song)| {
                 let is_playing = song == &app.current_song
                     && matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused);
+                let is_selected = i == app.selected_favorite;
 
                 let style = if is_playing {
                     Style::default()
                         .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD)
+                } else if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -127,28 +130,22 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             })
             .collect();
 
-        let favorites_list = List::new(favorite_items)
-            .block(
-                Block::default()
-                    .title(format!(
-                        "♥ 收藏列表 ({}) - ↑↓ 选择 | Enter 播放 | 'f' 添加/移除",
-                        app.favorites.len()
-                    ))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            );
+        let favorites_list = List::new(favorite_items).block(
+            Block::default()
+                .title(format!(
+                    "♥ 收藏列表 ({}) - ↑↓ 选择 | Enter 播放 | 'f' 添加/移除",
+                    app.favorites.len()
+                ))
+                .borders(Borders::ALL),
+        );
 
         let mut list_state = ListState::default();
         list_state.select(Some(app.selected_favorite));
         frame.render_stateful_widget(favorites_list, chunks[2], &mut list_state);
     }
 
-    // 日志区域 - 只显示最新的日志（自动滚动）
-    let log_height = chunks[3].height.saturating_sub(2) as usize; // 减去边框
+    // 日志区域
+    let log_height = chunks[3].height.saturating_sub(2) as usize;
     let log_start = if app.logs.len() > log_height {
         app.logs.len() - log_height
     } else {

@@ -97,15 +97,15 @@ impl Player {
                 match result {
                     Ok(_) => {
                         let mut a = app_c.lock().await;
-                        a.add_log(format!("播放成功，设置状态"));
+                        a.add_log("播放成功，设置状态".to_string());
                         a.status = PlayerStatus::Playing;
                         a.current_song = title.clone();
                         a.sync_selected_favorite();
                     }
                     Err(e) => {
                         let mut a = app_c.lock().await;
+                        a.add_log(format!("播放失败: {}", e));
                         a.status = PlayerStatus::Error(e.to_string());
-                        a.add_log(format!("[错误] {}", e));
                     }
                 }
             });
@@ -147,8 +147,8 @@ impl Player {
                 }
                 Err(e) => {
                     let mut a = app_c.lock().await;
-                    a.status = PlayerStatus::Error(e.to_string());
                     a.add_log(format!("播放失败: {}", e));
+                    a.status = PlayerStatus::Error(e.to_string());
                 }
             }
         });
@@ -181,6 +181,19 @@ impl Player {
     pub async fn check_and_play_next(&self) {
         let mut app_lock = self.app.lock().await;
 
+        // 错误恢复：检测到错误状态时自动播放下一首
+        if let PlayerStatus::Error(_) = &app_lock.status {
+            if let Some(next_song) = app_lock.get_next_song() {
+                app_lock.add_log(format!("自动跳过错误，播放下一首: {}", next_song));
+                drop(app_lock);
+                self.search_and_play(next_song).await;
+                return;
+            } else {
+                app_lock.add_log("没有更多歌曲可播放".to_string());
+                return;
+            }
+        }
+
         if let PlayerStatus::Playing = app_lock.status {
             match self.audio.get_progress().await {
                 Ok(p) => {
@@ -189,7 +202,7 @@ impl Player {
                 Err(_) => {
                     // 进度获取失败，可能是 mpv 还没准备好
                     if app_lock.progress == 0.0 {
-                        app_lock.add_log(format!("等待 mpv 准备就绪..."));
+                        app_lock.add_log("等待 mpv 准备就绪...".to_string());
                     }
                 }
             }

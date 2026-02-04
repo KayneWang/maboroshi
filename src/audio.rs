@@ -107,7 +107,7 @@ impl AudioBackend {
             ])
             .output();
 
-        log_fn(format!("等待 yt-dlp 响应..."));
+        log_fn("等待 yt-dlp 响应...".to_string());
         let yt_output = match timeout(Duration::from_secs(30), yt_task).await {
             Ok(Ok(output)) => {
                 log_fn(format!("yt-dlp 执行完成，退出码: {}", output.status));
@@ -125,7 +125,7 @@ impl AudioBackend {
                 return Err(e.into());
             }
             Err(_) => {
-                log_fn(format!("yt-dlp 超时（30秒）"));
+                log_fn("yt-dlp 超时（30秒）".to_string());
                 return Err(anyhow::anyhow!("yt-dlp 超时"));
             }
         };
@@ -152,7 +152,7 @@ impl AudioBackend {
         F: FnMut(String),
     {
         // 清理旧进程和 socket
-        log_fn(format!("清理旧进程和 socket"));
+        log_fn("清理旧进程和 socket".to_string());
         let _ = std::process::Command::new("pkill").arg("mpv").output();
         if Path::new(&self.socket_path).exists() {
             let _ = std::fs::remove_file(&self.socket_path);
@@ -162,7 +162,7 @@ impl AudioBackend {
 
         // 1. 检查缓存
         let stream_url = if let Some(cached_url) = self.get_cached_url(keyword) {
-            log_fn(format!("✓ 使用缓存的 URL"));
+            log_fn("✓ 使用缓存的 URL".to_string());
             cached_url
         } else {
             // 2. 缓存未命中，执行搜索
@@ -180,10 +180,10 @@ impl AudioBackend {
                 .output();
 
             // 设置 10 秒超时
-            log_fn(format!("等待 yt-dlp 响应..."));
+            log_fn("等待 yt-dlp 响应...".to_string());
             let yt_output = match timeout(Duration::from_secs(10), yt_task).await {
                 Ok(Ok(output)) => {
-                    log_fn(format!("yt-dlp 执行完成"));
+                    log_fn("yt-dlp 执行完成".to_string());
                     if !output.stderr.is_empty() {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         log_fn(format!(
@@ -198,7 +198,7 @@ impl AudioBackend {
                     return Err(e.into());
                 }
                 Err(_) => {
-                    log_fn(format!("yt-dlp 超时（10秒）"));
+                    log_fn("yt-dlp 超时（10秒）".to_string());
                     return Err(anyhow::anyhow!("yt-dlp 超时"));
                 }
             };
@@ -207,7 +207,7 @@ impl AudioBackend {
                 .trim()
                 .to_string();
             if url.is_empty() {
-                log_fn(format!("未找到音频流"));
+                log_fn("未找到音频流".to_string());
                 return Err(anyhow::anyhow!("未找到音频流"));
             }
             log_fn(format!(
@@ -217,13 +217,13 @@ impl AudioBackend {
 
             // 3. 缓存 URL
             self.cache_url(keyword.to_string(), url.clone());
-            log_fn(format!("✓ 已缓存 URL"));
+            log_fn("✓ 已缓存 URL".to_string());
 
             url
         };
 
         // 4. 启动 mpv
-        log_fn(format!("启动 mpv 播放器"));
+        log_fn("启动 mpv 播放器".to_string());
         Command::new("mpv")
             .env("PATH", &path)
             .args([
@@ -236,7 +236,7 @@ impl AudioBackend {
             .stderr(Stdio::null())
             .spawn()?;
 
-        log_fn(format!("mpv 已启动，等待 socket 就绪..."));
+        log_fn("mpv 已启动，等待 socket 就绪...".to_string());
 
         // 等待 socket 文件创建（最多等待 3 秒）
         let socket_path = self.socket_path.clone();
@@ -249,7 +249,7 @@ impl AudioBackend {
         }
 
         if !Path::new(&socket_path).exists() {
-            log_fn(format!("警告: socket 文件未创建，但继续播放"));
+            log_fn("警告: socket 文件未创建，但继续播放".to_string());
         }
 
         Ok(())
