@@ -69,7 +69,7 @@ check_dependencies() {
 
 # 下载二进制文件
 download_binary() {
-    info "下载 maboroshi..."
+    info "下载 maboroshi..." >&2
     
     BINARY_NAME="maboroshi-${PLATFORM}"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/latest/download/${BINARY_NAME}"
