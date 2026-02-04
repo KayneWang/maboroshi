@@ -1,6 +1,6 @@
 [package]
 name = "maboroshi"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Kayne <w.zengkai@gmail.com>"]
 description = "A lightweight terminal-based music player powered by YouTube"
