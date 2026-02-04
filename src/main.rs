@@ -10,18 +10,71 @@ use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
 use std::{
-    io,
+    env, io,
+    process::Command,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
 
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+fn print_version() {
+    println!("maboroshi v{}", VERSION);
+}
+
+fn upgrade() -> Result<()> {
+    println!("🔄 正在升级 maboroshi...");
+
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(
+            "curl -fsSL https://raw.githubusercontent.com/KayneWang/maboroshi/main/install.sh | sh",
+        )
+        .status()?;
+
+    if status.success() {
+        println!("✅ 升级成功！");
+        Ok(())
+    } else {
+        anyhow::bail!("升级失败")
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() > 1 {
+        match args[1].as_str() {
+            "--version" | "-v" => {
+                print_version();
+                return Ok(());
+            }
+            "--upgrade" | "--update" => {
+                return upgrade();
+            }
+            "--help" | "-h" => {
+                println!("maboroshi v{}", VERSION);
+                println!("\n用法:");
+                println!("  maboroshi              启动音乐播放器");
+                println!("  maboroshi --version    显示版本信息");
+                println!("  maboroshi --upgrade    升级到最新版本");
+                println!("  maboroshi --help       显示帮助信息");
+                return Ok(());
+            }
+            _ => {
+                eprintln!("未知参数: {}", args[1]);
+                eprintln!("使用 --help 查看帮助");
+                std::process::exit(1);
+            }
+        }
+    }
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;

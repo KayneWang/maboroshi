@@ -102,6 +102,15 @@ maboroshi
 
 ## 🎮 使用方法
 
+### 命令行选项
+
+```bash
+maboroshi              # 启动音乐播放器
+maboroshi --version    # 显示版本信息
+maboroshi --upgrade    # 升级到最新版本
+maboroshi --help       # 显示帮助信息
+```
+
 ### 基本操作
 
 | 按键      | 功能                      |

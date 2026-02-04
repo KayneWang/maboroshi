@@ -8,21 +8,30 @@ curl -fsSL https://raw.githubusercontent.com/KayneWang/maboroshi/main/install.sh
 
 # 安装依赖
 brew install yt-dlp mpv  # macOS
-sudo apt install yt-dlp mpv  # Linux
+```
+
+## 升级
+
+```bash
+# 升级到最新版本
+maboroshi --upgrade
+
+# 或者重新运行安装脚本
+curl -fsSL https://raw.githubusercontent.com/KayneWang/maboroshi/main/install.sh | sh
 ```
 
 ## 键盘快捷键
 
-| 按键 | 功能 |
-|------|------|
-| `s` | 搜索音乐 |
-| `Enter` | 确认/播放 |
-| `Esc` | 取消/返回 |
-| `↑` / `↓` | 上下选择 |
-| `Space` | 暂停/继续 |
-| `f` | 收藏/取消收藏 |
-| `m` | 切换播放模式 |
-| `q` | 退出 |
+| 按键      | 功能          |
+| --------- | ------------- |
+| `s`       | 搜索音乐      |
+| `Enter`   | 确认/播放     |
+| `Esc`     | 取消/返回     |
+| `↑` / `↓` | 上下选择      |
+| `Space`   | 暂停/继续     |
+| `f`       | 收藏/取消收藏 |
+| `m`       | 切换播放模式  |
+| `q`       | 退出          |
 
 ## 播放模式
 
@@ -46,6 +55,7 @@ sudo apt install yt-dlp mpv  # Linux
 ## 常见问题
 
 **搜索失败？**
+
 ```bash
 # 更新 yt-dlp
 brew upgrade yt-dlp  # macOS
@@ -53,6 +63,7 @@ pip install -U yt-dlp  # Linux
 ```
 
 **播放失败？**
+
 - 检查 mpv 是否安装: `mpv --version`
 - 清理旧进程: `pkill mpv`
 - 删除旧 socket: `rm /tmp/maboroshi.sock`
