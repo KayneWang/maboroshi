@@ -94,13 +94,28 @@ download_binary() {
 install_binary() {
     BINARY_PATH=$1
     
+    # 检查二进制文件是否存在
+    if [ ! -f "$BINARY_PATH" ]; then
+        error "二进制文件不存在: $BINARY_PATH"
+    fi
+    
     info "安装 maboroshi 到 $INSTALL_DIR..."
     
-    if [ -w "$INSTALL_DIR" ]; then
-        mv "$BINARY_PATH" "$INSTALL_DIR/maboroshi"
-    else
-        sudo mv "$BINARY_PATH" "$INSTALL_DIR/maboroshi"
+    # 确保安装目录存在
+    if [ ! -d "$INSTALL_DIR" ]; then
+        info "创建目录 $INSTALL_DIR..."
+        sudo mkdir -p "$INSTALL_DIR"
     fi
+    
+    # 移动文件
+    if [ -w "$INSTALL_DIR" ]; then
+        mv "$BINARY_PATH" "$INSTALL_DIR/maboroshi" || error "安装失败"
+    else
+        sudo mv "$BINARY_PATH" "$INSTALL_DIR/maboroshi" || error "安装失败"
+    fi
+    
+    # 确保文件可执行
+    sudo chmod +x "$INSTALL_DIR/maboroshi"
     
     info "安装成功！"
 }
