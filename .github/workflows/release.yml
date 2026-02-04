@@ -12,10 +12,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            artifact_name: maboroshi
-            asset_name: maboroshi-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: maboroshi

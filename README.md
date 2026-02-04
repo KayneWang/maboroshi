@@ -10,12 +10,11 @@
 ## 🚀 快速开始
 
 ```bash
-# macOS / Linux 一键安装
+# macOS 一键安装
 curl -fsSL https://raw.githubusercontent.com/KayneWang/maboroshi/main/install.sh | sh
 
 # 安装依赖（必需）
-brew install yt-dlp mpv  # macOS
-# sudo apt install yt-dlp mpv  # Linux
+brew install yt-dlp mpv
 
 # 运行
 maboroshi
@@ -45,19 +44,6 @@ maboroshi
 brew install yt-dlp mpv
 ```
 
-### Linux 安装
-
-```bash
-# Ubuntu/Debian
-sudo apt install yt-dlp mpv
-
-# Arch Linux
-sudo pacman -S yt-dlp mpv
-
-# Fedora
-sudo dnf install yt-dlp mpv
-```
-
 ## 🚀 安装
 
 ### 方式 1：下载预编译二进制（推荐）
@@ -81,14 +67,6 @@ sudo mv maboroshi /usr/local/bin/
 
 ```bash
 curl -L https://github.com/KayneWang/maboroshi/releases/latest/download/maboroshi-macos-x86_64 -o maboroshi
-chmod +x maboroshi
-sudo mv maboroshi /usr/local/bin/
-```
-
-#### Linux (x86_64)
-
-```bash
-curl -L https://github.com/KayneWang/maboroshi/releases/latest/download/maboroshi-linux-x86_64 -o maboroshi
 chmod +x maboroshi
 sudo mv maboroshi /usr/local/bin/
 ```
@@ -219,16 +197,15 @@ maboroshi
 - Chrome 浏览器已安装
 - 已登录 YouTube 账号
 
-## � 支持的平台
+## 📦 支持的平台
 
 | 平台    | 架构                  | 状态      |
 | ------- | --------------------- | --------- |
 | macOS   | Apple Silicon (ARM64) | ✅ 支持   |
 | macOS   | Intel (x86_64)        | ✅ 支持   |
-| Linux   | x86_64                | ✅ 支持   |
 | Windows | -                     | ⏳ 计划中 |
 
-## � 开发计划
+## 📄 开发计划
 
 - [ ] 播放历史记录
 - [ ] 快进/快退功能

@@ -44,18 +44,8 @@ detect_platform() {
                     ;;
             esac
             ;;
-        Linux)
-            case "$ARCH" in
-                x86_64)
-                    PLATFORM="linux-x86_64"
-                    ;;
-                *)
-                    error "不支持的 Linux 架构: $ARCH"
-                    ;;
-            esac
-            ;;
         *)
-            error "不支持的操作系统: $OS"
+            error "目前只支持 macOS 平台"
             ;;
     esac
     
@@ -68,28 +58,12 @@ check_dependencies() {
     
     if ! command -v yt-dlp >/dev/null 2>&1; then
         warn "未找到 yt-dlp，请先安装："
-        case "$OS" in
-            Darwin)
-                echo "  brew install yt-dlp"
-                ;;
-            Linux)
-                echo "  sudo apt install yt-dlp  # Ubuntu/Debian"
-                echo "  sudo pacman -S yt-dlp    # Arch Linux"
-                ;;
-        esac
+        echo "  brew install yt-dlp"
     fi
     
     if ! command -v mpv >/dev/null 2>&1; then
         warn "未找到 mpv，请先安装："
-        case "$OS" in
-            Darwin)
-                echo "  brew install mpv"
-                ;;
-            Linux)
-                echo "  sudo apt install mpv  # Ubuntu/Debian"
-                echo "  sudo pacman -S mpv    # Arch Linux"
-                ;;
-        esac
+        echo "  brew install mpv"
     fi
 }
 
