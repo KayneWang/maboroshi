@@ -1,10 +1,12 @@
 mod app;
 mod audio;
+mod config;
 mod player;
 mod ui;
 
 use crate::app::{App, PlayerStatus};
 use crate::audio::AudioBackend;
+use crate::config::Config;
 use crate::player::Player;
 use anyhow::Result;
 use crossterm::{
@@ -81,8 +83,27 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    let config = Config::load();
+    let _ = Config::save_example();
+
     let app = Arc::new(Mutex::new(App::new()));
-    let audio = Arc::new(AudioBackend::new());
+
+    {
+        let mut app_lock = app.lock().await;
+        app_lock.current_source = config.search.source.clone();
+        app_lock.add_log(format!("配置加载完成"));
+        app_lock.add_log(format!(
+            "数据源: {} ({})",
+            config.search.source,
+            config.get_search_prefix()
+        ));
+        app_lock.add_log(format!(
+            "缓存设置: {} 首歌曲, {} 秒有效期",
+            config.cache.url_cache_size, config.cache.url_cache_ttl
+        ));
+    }
+
+    let audio = Arc::new(AudioBackend::new(config));
     let player = Player::new(Arc::clone(&audio), Arc::clone(&app));
 
     let tick_rate = Duration::from_millis(200);
@@ -172,8 +193,11 @@ async fn main() -> Result<()> {
                                 app_lock.select_next_favorite();
                             }
                             KeyCode::Enter => {
-                                if let Some(song) = app_lock.get_selected_favorite() {
-                                    app_lock.add_log(format!("从收藏播放: {}", song));
+                                if let Some(item) = app_lock.get_selected_favorite() {
+                                    let song = item.title.clone();
+                                    let source = item.source.clone();
+                                    app_lock.add_log(format!("从收藏播放: {} [{}]", song, source));
+                                    app_lock.current_source = source;
                                     drop(app_lock);
                                     player.search_and_play(song).await;
                                     continue;

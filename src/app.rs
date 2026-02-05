@@ -19,9 +19,15 @@ pub enum PlayMode {
     Sequential, // 顺序播放（播完停止）
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct FavoriteItem {
+    pub title: String,
+    pub source: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct FavoritesData {
-    favorites: Vec<String>,
+    items: Vec<FavoriteItem>,
 }
 
 pub struct App {
@@ -32,12 +38,13 @@ pub struct App {
     pub logs: Vec<String>,
     pub input_mode: bool,
     pub input_buffer: String,
-    pub favorites: Vec<String>,
+    pub favorites: Vec<FavoriteItem>,
     pub selected_favorite: usize,
     pub play_mode: PlayMode,
     pub search_results: Vec<SearchResult>,
     pub selected_search_result: usize,
     pub saved_status: Option<PlayerStatus>,
+    pub current_source: String,
 }
 
 impl App {
@@ -46,20 +53,20 @@ impl App {
         PathBuf::from(home).join(".maboroshi_favorites.json")
     }
 
-    fn load_favorites() -> Vec<String> {
+    fn load_favorites() -> Vec<FavoriteItem> {
         let path = Self::get_favorites_path();
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(data) = serde_json::from_str::<FavoritesData>(&content) {
-                return data.favorites;
+                return data.items;
             }
         }
         Vec::new()
     }
 
-    fn save_favorites(favorites: &[String]) {
+    fn save_favorites(favorites: &[FavoriteItem]) {
         let path = Self::get_favorites_path();
         let data = FavoritesData {
-            favorites: favorites.to_vec(),
+            items: favorites.to_vec(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&data) {
             let _ = fs::write(&path, json);
@@ -87,6 +94,7 @@ impl App {
             search_results: Vec::new(),
             selected_search_result: 0,
             saved_status: None,
+            current_source: "yt".to_string(),
         }
     }
 
@@ -105,12 +113,22 @@ impl App {
 
         self.add_log(format!("当前歌曲: '{}'", self.current_song));
 
-        if let Some(pos) = self.favorites.iter().position(|s| s == &self.current_song) {
+        if let Some(pos) = self
+            .favorites
+            .iter()
+            .position(|item| item.title == self.current_song)
+        {
             self.favorites.remove(pos);
             self.add_log(format!("取消收藏: {}", self.current_song));
         } else {
-            self.favorites.push(self.current_song.clone());
-            self.add_log(format!("已收藏: {}", self.current_song));
+            self.favorites.push(FavoriteItem {
+                title: self.current_song.clone(),
+                source: self.current_source.clone(),
+            });
+            self.add_log(format!(
+                "已收藏: {} ({})",
+                self.current_song, self.current_source
+            ));
         }
 
         // 自动保存收藏列表
@@ -118,19 +136,24 @@ impl App {
     }
 
     pub fn is_favorite(&self) -> bool {
-        self.favorites.contains(&self.current_song)
+        self.favorites
+            .iter()
+            .any(|item| item.title == self.current_song)
     }
 
     pub fn toggle_favorite_from_search_result(&mut self) {
         if let Some(result) = self.get_selected_search_result() {
             let title = result.title.clone();
 
-            if let Some(pos) = self.favorites.iter().position(|s| s == &title) {
+            if let Some(pos) = self.favorites.iter().position(|item| item.title == title) {
                 self.favorites.remove(pos);
                 self.add_log(format!("取消收藏: {}", title));
             } else {
-                self.favorites.push(title.clone());
-                self.add_log(format!("已收藏: {}", title));
+                self.favorites.push(FavoriteItem {
+                    title: title.clone(),
+                    source: self.current_source.clone(),
+                });
+                self.add_log(format!("已收藏: {} ({})", title, self.current_source));
             }
 
             Self::save_favorites(&self.favorites);
@@ -153,13 +176,17 @@ impl App {
         }
     }
 
-    pub fn get_selected_favorite(&self) -> Option<String> {
-        self.favorites.get(self.selected_favorite).cloned()
+    pub fn get_selected_favorite(&self) -> Option<&FavoriteItem> {
+        self.favorites.get(self.selected_favorite)
     }
 
     pub fn sync_selected_favorite(&mut self) {
         // 同步 selected_favorite 索引到当前播放的歌曲
-        if let Some(idx) = self.favorites.iter().position(|s| s == &self.current_song) {
+        if let Some(idx) = self
+            .favorites
+            .iter()
+            .position(|item| item.title == self.current_song)
+        {
             self.selected_favorite = idx;
             self.add_log(format!("同步收藏索引到: {}", idx));
         } else {
@@ -266,20 +293,22 @@ impl App {
                 }
 
                 // 找到当前歌曲在收藏列表中的位置
-                if let Some(current_idx) =
-                    self.favorites.iter().position(|s| s == &self.current_song)
+                if let Some(current_idx) = self
+                    .favorites
+                    .iter()
+                    .position(|item| item.title == self.current_song)
                 {
                     self.add_log(format!("当前歌曲在收藏列表索引: {}", current_idx));
                     let next_idx = current_idx + 1;
                     if next_idx < self.favorites.len() {
                         self.selected_favorite = next_idx;
                         self.add_log(format!("播放下一首，索引: {}", next_idx));
-                        return Some(self.favorites[next_idx].clone());
+                        return Some(self.favorites[next_idx].title.clone());
                     } else if self.play_mode == PlayMode::ListLoop {
                         // 列表循环：回到第一首
                         self.selected_favorite = 0;
                         self.add_log("列表循环，回到第一首".to_string());
-                        return Some(self.favorites[0].clone());
+                        return Some(self.favorites[0].title.clone());
                     }
                 } else {
                     self.add_log(format!("当前歌曲 '{}' 不在收藏列表中", self.current_song));

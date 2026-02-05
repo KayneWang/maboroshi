@@ -108,8 +108,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .favorites
             .iter()
             .enumerate()
-            .map(|(i, song)| {
-                let is_playing = song == &app.current_song
+            .map(|(i, item)| {
+                let is_playing = item.title == app.current_song
                     && matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused);
                 let is_selected = i == app.selected_favorite;
 
@@ -126,7 +126,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 };
 
                 let prefix = if is_playing { "▶ " } else { "♥ " };
-                ListItem::new(format!("{}{}", prefix, song)).style(style)
+                let display_text = if item.source == "yt" {
+                    format!("{}{}", prefix, item.title)
+                } else {
+                    format!("{}{} [{}]", prefix, item.title, item.source)
+                };
+                ListItem::new(display_text).style(style)
             })
             .collect();
 

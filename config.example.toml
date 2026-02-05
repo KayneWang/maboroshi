@@ -1,0 +1,51 @@
+# Maboroshi 配置文件示例
+# 复制此文件到 ~/.config/maboroshi/config.toml 并根据需要修改
+
+[search]
+# 搜索源：支持任意 yt-dlp 兼容的平台
+# 常用选项：
+#   - "yt" 或 "youtube"  : YouTube (默认)
+#   - "bili"             : Bilibili
+#   - "soundcloud"       : SoundCloud
+#   - "spotify"          : Spotify (需要账号)
+#   - "bandcamp"         : Bandcamp
+#   - "niconico"         : Niconico (ニコニコ動画)
+# 
+# 也可以直接使用 yt-dlp 的搜索前缀格式：
+#   - "ytsearch"         : YouTube 搜索
+#   - "bilisearch"       : Bilibili 搜索
+#   - "scsearch"         : SoundCloud 搜索
+# 
+# 完整支持列表: https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md
+source = "yt"
+
+# 搜索结果数量
+max_results = 15
+
+# 搜索超时时间（秒）
+timeout = 30
+
+# Cookie 来源浏览器：chrome, firefox, safari
+cookies_browser = "chrome"
+
+[cache]
+# URL 缓存数量（最多缓存多少首歌曲的 URL）
+url_cache_size = 30
+
+# URL 缓存有效期（秒，默认 2 小时）
+url_cache_ttl = 7200
+
+[network]
+# 播放超时时间（秒）
+play_timeout = 10
+
+[playback]
+# 默认播放模式：single（单曲循环）、list_loop（列表循环）、sequential（顺序播放）
+default_mode = "list_loop"
+
+[paths]
+# mpv IPC Socket 路径
+socket_path = "/tmp/maboroshi.sock"
+
+# 收藏列表文件路径
+favorites_file = "~/.maboroshi_favorites.json"

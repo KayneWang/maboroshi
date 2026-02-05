@@ -1,3 +1,4 @@
+use crate::config::Config;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ struct CachedSong {
 pub struct AudioBackend {
     socket_path: String,
     cache: Mutex<HashMap<String, CachedSong>>,
+    config: Config,
 }
 
 #[derive(Clone, Debug)]
@@ -26,17 +28,17 @@ pub struct SearchResult {
 }
 
 impl AudioBackend {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
         Self {
-            socket_path: "/tmp/maboroshi.sock".to_string(),
+            socket_path: config.paths.socket_path.clone(),
             cache: Mutex::new(HashMap::new()),
+            config,
         }
     }
 
     fn is_cache_valid(&self, cached_at: SystemTime) -> bool {
-        // 缓存有效期：2 小时
         if let Ok(elapsed) = SystemTime::now().duration_since(cached_at) {
-            elapsed.as_secs() < 7200 // 2 hours
+            elapsed.as_secs() < self.config.cache.url_cache_ttl
         } else {
             false
         }
@@ -63,8 +65,8 @@ impl AudioBackend {
                 },
             );
 
-            // 限制缓存大小，只保留最近 30 首
-            if cache.len() > 30 {
+            // 限制缓存大小
+            if cache.len() > self.config.cache.url_cache_size {
                 // 找到最旧的条目并删除
                 if let Some(oldest_key) = cache
                     .iter()
@@ -95,20 +97,22 @@ impl AudioBackend {
         log_fn(format!("开始搜索: {}", keyword));
 
         // 搜索前 10 个结果
+        let search_prefix = self.config.get_search_prefix();
+        let max_results = self.config.search.max_results;
         let yt_task = Command::new("yt-dlp")
             .env("PATH", &path)
             .args([
                 "--cookies-from-browser",
-                "chrome",
+                &self.config.search.cookies_browser,
                 "--dump-json",
                 "--flat-playlist",
-                // "--verbose", // 详细日志
-                &format!("ytsearch15:{}", keyword),
+                &format!("{}{}:{}", search_prefix, max_results, keyword),
             ])
             .output();
 
         log_fn("等待 yt-dlp 响应...".to_string());
-        let yt_output = match timeout(Duration::from_secs(30), yt_task).await {
+        let search_timeout = self.config.search.timeout;
+        let yt_output = match timeout(Duration::from_secs(search_timeout), yt_task).await {
             Ok(Ok(output)) => {
                 log_fn(format!("yt-dlp 执行完成，退出码: {}", output.status));
 
@@ -125,7 +129,7 @@ impl AudioBackend {
                 return Err(e.into());
             }
             Err(_) => {
-                log_fn("yt-dlp 超时（30秒）".to_string());
+                log_fn(format!("yt-dlp 超时（{}秒）", search_timeout));
                 return Err(anyhow::anyhow!("yt-dlp 超时"));
             }
         };
@@ -167,21 +171,22 @@ impl AudioBackend {
         } else {
             // 2. 缓存未命中，执行搜索
             log_fn(format!("开始搜索: {}", keyword));
+            let search_prefix = self.config.get_search_prefix();
             let yt_task = Command::new("yt-dlp")
                 .env("PATH", &path)
                 .args([
                     "--cookies-from-browser",
-                    "chrome",
+                    &self.config.search.cookies_browser,
                     "--get-url",
                     "-f",
                     "bestaudio",
-                    &format!("ytsearch1:{}", keyword),
+                    &format!("{}1:{}", search_prefix, keyword),
                 ])
                 .output();
 
-            // 设置 10 秒超时
             log_fn("等待 yt-dlp 响应...".to_string());
-            let yt_output = match timeout(Duration::from_secs(10), yt_task).await {
+            let play_timeout = self.config.network.play_timeout;
+            let yt_output = match timeout(Duration::from_secs(play_timeout), yt_task).await {
                 Ok(Ok(output)) => {
                     log_fn("yt-dlp 执行完成".to_string());
                     if !output.stderr.is_empty() {
@@ -198,7 +203,7 @@ impl AudioBackend {
                     return Err(e.into());
                 }
                 Err(_) => {
-                    log_fn("yt-dlp 超时（10秒）".to_string());
+                    log_fn(format!("yt-dlp 超时（{}秒）", play_timeout));
                     return Err(anyhow::anyhow!("yt-dlp 超时"));
                 }
             };

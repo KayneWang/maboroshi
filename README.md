@@ -22,13 +22,13 @@ maboroshi
 
 ## ✨ 特性
 
-- 🔍 **YouTube 音乐搜索** - 通过关键词搜索并播放音乐
+- 🔍 **多源音乐搜索** - 支持 YouTube、Bilibili 等多个平台搜索并播放音乐
+- ⚙️ **配置文件支持** - 自定义搜索源、缓存大小、超时时间等参数
 - ⭐ **收藏管理** - 收藏喜欢的歌曲，快速访问
 - 🔄 **多种播放模式** - 单曲循环、列表循环、顺序播放
 - 📋 **实时日志** - 查看播放器运行状态和操作记录
 - 🎯 **智能滚动** - 搜索结果和收藏列表支持键盘滚动
 - 💾 **URL 缓存** - 缓存音频流 URL，加快播放速度
-- 🔧 **错误恢复** - 播放失败时自动跳过，继续播放下一首
 - 🎨 **美观界面** - 简洁的 TUI 界面，状态一目了然
 
 ## 📦 依赖
@@ -153,9 +153,56 @@ maboroshi --help       # 显示帮助信息
 
 ## 🗂️ 文件位置
 
+- **配置文件**: `~/.config/maboroshi/config.toml`
 - **收藏列表**: `~/.maboroshi_favorites.json`
 - **URL 缓存**: 内存中（重启后清空）
-- **mpv IPC Socket**: `/tmp/maboroshi.sock`
+- **mpv IPC Socket**: `/tmp/maboroshi.sock`（可配置）
+
+## ⚙️ 配置文件
+
+Maboroshi 支持通过配置文件自定义行为。首次运行时会自动在 `~/.config/maboroshi/config.toml` 创建默认配置文件。
+
+### 配置示例
+
+```toml
+[search]
+# 搜索源：youtube 或 bilibili
+source = "youtube"
+max_results = 15
+timeout = 30
+cookies_browser = "chrome"
+
+[cache]
+url_cache_size = 30
+url_cache_ttl = 7200  # 2 小时
+
+[network]
+play_timeout = 10
+
+[playback]
+default_mode = "list_loop"  # single, list_loop, sequential
+
+[paths]
+socket_path = "/tmp/maboroshi.sock"
+favorites_file = "~/.maboroshi_favorites.json"
+```
+
+### 支持的搜索源
+
+Maboroshi 支持所有 yt-dlp 兼容的平台，常用选项包括：
+
+- **YouTube** (`source = "yt"` 或 `"youtube"`): 默认搜索源
+- **Bilibili** (`source = "bili"`): 哔哩哔哩视频平台
+- **SoundCloud** (`source = "soundcloud"`): 音乐分享平台
+- **Spotify** (`source = "spotify"`): 需要账号登录
+- **Bandcamp** (`source = "bandcamp"`): 独立音乐平台
+- **Niconico** (`source = "niconico"`): ニコニコ動画
+
+也可以直接使用 yt-dlp 的搜索前缀格式（如 `"ytsearch"`、`"bilisearch"` 等）。
+
+完整支持列表请查看: [yt-dlp 支持的网站](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+
+更多配置选项请参考 [config.example.toml](config.example.toml)
 
 ## 🎯 界面说明
 
@@ -182,7 +229,7 @@ maboroshi --help       # 显示帮助信息
 - **Rust** - 系统编程语言
 - **Ratatui** - 终端 UI 框架
 - **Tokio** - 异步运行时
-- **yt-dlp** - YouTube 下载工具
+- **yt-dlp** - 多平台视频/音频下载工具
 - **mpv** - 媒体播放器
 
 ## 🐛 故障排除
@@ -216,11 +263,11 @@ maboroshi --help       # 显示帮助信息
 
 ## 📄 开发计划
 
+- [x] 配置文件支持
+- [x] 多数据源支持（YouTube、Bilibili）
 - [ ] 播放历史记录
 - [ ] 快进/快退功能
 - [ ] 播放队列
-- [ ] 导出/导入收藏列表
-- [ ] 配置文件支持
 - [ ] Windows 平台支持
 
 ## 🤝 贡献
