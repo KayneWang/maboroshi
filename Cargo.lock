@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "maboroshi"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "color-eyre",
