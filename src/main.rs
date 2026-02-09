@@ -209,14 +209,24 @@ async fn main() -> Result<()> {
                                 continue;
                             }
                             KeyCode::Right => {
-                                drop(app_lock);
-                                player.seek_forward().await;
-                                continue;
+                                if matches!(
+                                    app_lock.status,
+                                    PlayerStatus::Playing | PlayerStatus::Paused
+                                ) {
+                                    drop(app_lock);
+                                    player.seek_forward().await;
+                                    continue;
+                                }
                             }
                             KeyCode::Left => {
-                                drop(app_lock);
-                                player.seek_backward().await;
-                                continue;
+                                if matches!(
+                                    app_lock.status,
+                                    PlayerStatus::Playing | PlayerStatus::Paused
+                                ) {
+                                    drop(app_lock);
+                                    player.seek_backward().await;
+                                    continue;
+                                }
                             }
                             _ => {}
                         }
