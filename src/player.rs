@@ -197,23 +197,37 @@ impl Player {
             }
         }
 
-        if let PlayerStatus::Playing = app_lock.status {
+        if let PlayerStatus::Playing | PlayerStatus::Paused = app_lock.status {
+            // 无论是播放还是暂停状态，都更新进度
             match self.audio.get_progress().await {
                 Ok(p) => {
                     app_lock.progress = p;
                 }
                 Err(_) => {
-                    // 进度获取失败，可能是 mpv 还没准备好
                     if app_lock.progress == 0.0 {
                         app_lock.add_log("等待 mpv 准备就绪...".to_string());
                     }
                 }
             }
 
-            // 检查播放是否结束
+            // 检查播放状态并同步到应用状态
+            if let Ok(is_paused) = self.audio.is_paused().await {
+                if is_paused {
+                    if !matches!(app_lock.status, PlayerStatus::Paused) {
+                        app_lock.status = PlayerStatus::Paused;
+                    }
+                    return;
+                } else {
+                    if matches!(app_lock.status, PlayerStatus::Paused) {
+                        app_lock.status = PlayerStatus::Playing;
+                    }
+                }
+            }
+
+            // 检查是否播放结束
             if let Ok(is_playing) = self.audio.is_playing().await {
                 if !is_playing {
-                    // 播放结束，尝试播放下一首
+                    // 播放结束（歌曲播完），尝试播放下一首
                     if let Some(next_song) = app_lock.get_next_song() {
                         app_lock.add_log(format!("自动播放下一首: {}", next_song));
                         drop(app_lock);

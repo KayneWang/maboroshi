@@ -319,6 +319,39 @@ impl AudioBackend {
         }
     }
 
+    pub async fn is_paused(&self) -> Result<bool> {
+        if !Path::new(&self.socket_path).exists() {
+            return Ok(false);
+        }
+
+        let cmd = serde_json::json!({ "command": ["get_property", "pause"] });
+        match tokio::net::UnixStream::connect(&self.socket_path).await {
+            Ok(mut stream) => {
+                if stream
+                    .write_all(format!("{}\n", cmd).as_bytes())
+                    .await
+                    .is_err()
+                {
+                    return Ok(false);
+                }
+
+                let mut buf = [0; 1024];
+                match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await
+                {
+                    Ok(Ok(n)) if n > 0 => {
+                        if let Ok(resp) = serde_json::from_slice::<Value>(&buf[..n]) {
+                            // pause 为 true 表示处于暂停状态
+                            return Ok(resp["data"].as_bool().unwrap_or(false));
+                        }
+                        Ok(false)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
     pub async fn seek(&self, seconds: i32) -> Result<()> {
         self.send_command(vec!["seek", &seconds.to_string(), "relative"])
             .await
