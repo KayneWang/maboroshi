@@ -167,7 +167,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let help_text = if app.input_mode {
         format!(" 搜索: {} (按 Enter 确认 | Esc 取消)", app.input_buffer)
     } else {
-        " 'q' 退出 | 's' 搜索 | 'f' 收藏 | 'm' 切换模式 | '↑↓' 选择 | 'Enter' 播放 | 'space' 暂停 "
+        " 'q' 退出 | 's' 搜索 | 'f' 收藏 | 'm' 切换模式 | '↑↓' 选择 | '←→' 快退/快进 | 'Enter' 播放 | 'space' 暂停 "
             .to_string()
     };
 

@@ -1,16 +1,18 @@
 use crate::app::{App, PlayerStatus};
 use crate::audio::AudioBackend;
+use crate::config::Config;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct Player {
     audio: Arc<AudioBackend>,
     app: Arc<Mutex<App>>,
+    config: Config,
 }
 
 impl Player {
-    pub fn new(audio: Arc<AudioBackend>, app: Arc<Mutex<App>>) -> Self {
-        Self { audio, app }
+    pub fn new(audio: Arc<AudioBackend>, app: Arc<Mutex<App>>, config: Config) -> Self {
+        Self { audio, app, config }
     }
 
     pub async fn search(&self, keyword: String) {
@@ -222,6 +224,28 @@ impl Player {
                     }
                 }
             }
+        }
+    }
+
+    pub async fn seek_forward(&self) {
+        let seconds = self.config.playback.seek_seconds;
+        if let Err(e) = self.audio.seek(seconds).await {
+            let mut app_lock = self.app.lock().await;
+            app_lock.add_log(format!("快进失败: {}", e));
+        } else {
+            let mut app_lock = self.app.lock().await;
+            app_lock.add_log(format!("快进 {} 秒", seconds));
+        }
+    }
+
+    pub async fn seek_backward(&self) {
+        let seconds = self.config.playback.seek_seconds;
+        if let Err(e) = self.audio.seek(-seconds).await {
+            let mut app_lock = self.app.lock().await;
+            app_lock.add_log(format!("快退失败: {}", e));
+        } else {
+            let mut app_lock = self.app.lock().await;
+            app_lock.add_log(format!("快退 {} 秒", seconds));
         }
     }
 }

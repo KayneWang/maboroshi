@@ -103,8 +103,8 @@ async fn main() -> Result<()> {
         ));
     }
 
-    let audio = Arc::new(AudioBackend::new(config));
-    let player = Player::new(Arc::clone(&audio), Arc::clone(&app));
+    let audio = Arc::new(AudioBackend::new(config.clone()));
+    let player = Player::new(Arc::clone(&audio), Arc::clone(&app), config);
 
     let tick_rate = Duration::from_millis(200);
     let mut last_tick = Instant::now();
@@ -206,6 +206,16 @@ async fn main() -> Result<()> {
                             KeyCode::Char(' ') => {
                                 drop(app_lock);
                                 player.toggle_pause().await;
+                                continue;
+                            }
+                            KeyCode::Right => {
+                                drop(app_lock);
+                                player.seek_forward().await;
+                                continue;
+                            }
+                            KeyCode::Left => {
+                                drop(app_lock);
+                                player.seek_backward().await;
                                 continue;
                             }
                             _ => {}

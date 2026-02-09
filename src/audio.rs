@@ -318,4 +318,9 @@ impl AudioBackend {
             Err(_) => Ok(false),
         }
     }
+
+    pub async fn seek(&self, seconds: i32) -> Result<()> {
+        self.send_command(vec!["seek", &seconds.to_string(), "relative"])
+            .await
+    }
 }
