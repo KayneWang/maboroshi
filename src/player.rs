@@ -24,6 +24,7 @@ impl Player {
 
         let audio_c = Arc::clone(&self.audio);
         let app_c = Arc::clone(&self.app);
+        let keyword_clone = keyword.clone();
 
         tokio::spawn(async move {
             let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -36,7 +37,7 @@ impl Player {
             });
 
             let result = audio_c
-                .search(&keyword, |log| {
+                .search(&keyword, 1, |log| {
                     let _ = log_tx.send(log);
                 })
                 .await;
@@ -49,7 +50,10 @@ impl Player {
                         a.add_log("未找到搜索结果".to_string());
                     } else {
                         let count = results.len();
-                        a.set_search_results(results);
+                        a.current_page = 1;
+                        a.total_pages = 999;
+                        a.cache_page(1, results.clone());
+                        a.set_search_results(results, keyword_clone);
                         a.add_log(format!("找到 {} 个结果，使用 ↑↓ 选择，Enter 播放", count));
                     }
                 }
@@ -261,5 +265,102 @@ impl Player {
             let mut app_lock = self.app.lock().await;
             app_lock.add_log(format!("快退 {} 秒", seconds));
         }
+    }
+
+    pub async fn next_page(&self) {
+        let app_lock = self.app.lock().await;
+        let keyword = app_lock.last_search_keyword.clone();
+        let current_page = app_lock.current_page;
+        let total_pages = app_lock.total_pages;
+        drop(app_lock);
+
+        if keyword.is_empty() || current_page >= total_pages {
+            return;
+        }
+
+        let next_page = current_page + 1;
+        self.search_page(&keyword, next_page).await;
+    }
+
+    pub async fn prev_page(&self) {
+        let app_lock = self.app.lock().await;
+        let keyword = app_lock.last_search_keyword.clone();
+        let current_page = app_lock.current_page;
+        drop(app_lock);
+
+        if keyword.is_empty() || current_page <= 1 {
+            return;
+        }
+
+        let prev_page = current_page - 1;
+        self.search_page(&keyword, prev_page).await;
+    }
+
+    async fn search_page(&self, keyword: &str, page: usize) {
+        // 先检查缓存
+        let mut app_lock = self.app.lock().await;
+        if let Some(cached_results) = app_lock.get_cached_page(page) {
+            let cached_results = cached_results.clone();
+            app_lock.current_page = page;
+            app_lock.set_search_results(cached_results, keyword.to_string());
+            app_lock.add_log(format!("第 {} 页（来自缓存）", page));
+            return;
+        }
+
+        if app_lock.is_loading_page {
+            app_lock.add_log("正在加载中，请稍候...".to_string());
+            return;
+        }
+
+        app_lock.is_loading_page = true;
+        drop(app_lock);
+
+        // 缓存未命中，执行搜索
+        let audio_c = Arc::clone(&self.audio);
+        let app_c = Arc::clone(&self.app);
+        let keyword_clone = keyword.to_string();
+
+        tokio::spawn(async move {
+            let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            let app_log = app_c.clone();
+            tokio::spawn(async move {
+                while let Some(log) = log_rx.recv().await {
+                    app_log.lock().await.add_log(log);
+                }
+            });
+
+            let result = audio_c
+                .search(&keyword_clone, page, |log| {
+                    let _ = log_tx.send(log);
+                })
+                .await;
+
+            match result {
+                Ok(results) => {
+                    let mut a = app_c.lock().await;
+                    if results.is_empty() {
+                        if page > 1 {
+                            a.total_pages = page - 1;
+                            a.add_log(format!("已到达最后一页（第 {} 页）", page - 1));
+                        } else {
+                            a.add_log("没有找到结果".to_string());
+                        }
+                    } else {
+                        let count = results.len();
+                        a.current_page = page;
+                        a.cache_page(page, results.clone());
+                        a.set_search_results(results, keyword_clone);
+                        a.add_log(format!("第 {} 页，找到 {} 个结果", page, count));
+                    }
+                    a.is_loading_page = false;
+                }
+                Err(e) => {
+                    let mut a = app_c.lock().await;
+                    a.add_log(format!("搜索失败: {}", e));
+                    a.is_loading_page = false;
+                }
+            }
+        });
     }
 }

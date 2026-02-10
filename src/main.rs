@@ -167,6 +167,16 @@ async fn main() -> Result<()> {
                             KeyCode::Char('f') => {
                                 app_lock.toggle_favorite_from_search_result();
                             }
+                            KeyCode::Right => {
+                                drop(app_lock);
+                                player.next_page().await;
+                                continue;
+                            }
+                            KeyCode::Left => {
+                                drop(app_lock);
+                                player.prev_page().await;
+                                continue;
+                            }
                             _ => {}
                         }
                     } else {

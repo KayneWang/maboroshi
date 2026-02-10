@@ -1,5 +1,6 @@
 use crate::audio::SearchResult;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -45,6 +46,11 @@ pub struct App {
     pub selected_search_result: usize,
     pub saved_status: Option<PlayerStatus>,
     pub current_source: String,
+    pub last_search_keyword: String,
+    pub current_page: usize,
+    pub total_pages: usize,
+    pub search_cache: HashMap<usize, Vec<SearchResult>>,
+    pub is_loading_page: bool,
 }
 
 impl App {
@@ -95,6 +101,11 @@ impl App {
             selected_search_result: 0,
             saved_status: None,
             current_source: "yt".to_string(),
+            last_search_keyword: String::new(),
+            current_page: 1,
+            total_pages: 1,
+            search_cache: HashMap::new(),
+            is_loading_page: false,
         }
     }
 
@@ -218,9 +229,10 @@ impl App {
         self.search_results.get(self.selected_search_result)
     }
 
-    pub fn set_search_results(&mut self, results: Vec<SearchResult>) {
+    pub fn set_search_results(&mut self, results: Vec<SearchResult>, keyword: String) {
         self.search_results = results;
         self.selected_search_result = 0;
+        self.last_search_keyword = keyword;
         if !self.search_results.is_empty() {
             self.status = PlayerStatus::SearchResults;
         }
@@ -229,6 +241,24 @@ impl App {
     pub fn clear_search_results(&mut self) {
         self.search_results.clear();
         self.selected_search_result = 0;
+        self.last_search_keyword.clear();
+        self.search_cache.clear();
+    }
+
+    pub fn get_cached_page(&self, page: usize) -> Option<&Vec<SearchResult>> {
+        self.search_cache.get(&page)
+    }
+
+    pub fn cache_page(&mut self, page: usize, results: Vec<SearchResult>) {
+        const MAX_CACHE_SIZE: usize = 10;
+
+        self.search_cache.insert(page, results);
+
+        if self.search_cache.len() > MAX_CACHE_SIZE {
+            if let Some(&oldest_page) = self.search_cache.keys().min() {
+                self.search_cache.remove(&oldest_page);
+            }
+        }
     }
 
     pub fn save_status_before_search(&mut self) {

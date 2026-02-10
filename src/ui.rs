@@ -88,8 +88,9 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .block(
                 Block::default()
                     .title(format!(
-                        "🎯 搜索结果 ({}) - ↑↓ 选择 | Enter 播放 | 'f' 收藏",
-                        app.search_results.len()
+                        "🎯 搜索结果 ({}) - 第 {} 页 | ←→ 上一页/下一页 | ↑↓ 选择 | Enter 播放 | 'f' 收藏",
+                        app.search_results.len(),
+                        app.current_page
                     ))
                     .borders(Borders::ALL),
             )
@@ -166,6 +167,8 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     let help_text = if app.input_mode {
         format!(" 搜索: {} (按 Enter 确认 | Esc 取消)", app.input_buffer)
+    } else if matches!(app.status, PlayerStatus::SearchResults) {
+        " 'q' 退出 | 'Esc' 返回 ".to_string()
     } else {
         " 'q' 退出 | 's' 搜索 | 'f' 收藏 | 'm' 切换模式 | '↑↓' 选择 | '←→' 快退/快进 | 'Enter' 播放 | 'space' 暂停 "
             .to_string()

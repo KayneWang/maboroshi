@@ -89,16 +89,26 @@ impl AudioBackend {
         format!("/opt/homebrew/bin:/usr/local/bin:{}", current_path)
     }
 
-    pub async fn search<F>(&self, keyword: &str, mut log_fn: F) -> Result<Vec<SearchResult>>
+    pub async fn search<F>(
+        &self,
+        keyword: &str,
+        page: usize,
+        mut log_fn: F,
+    ) -> Result<Vec<SearchResult>>
     where
         F: FnMut(String),
     {
         let path = Self::get_extended_path();
-        log_fn(format!("开始搜索: {}", keyword));
+        log_fn(format!("开始搜索: {} (第 {} 页)", keyword, page));
 
-        // 搜索前 10 个结果
         let search_prefix = self.config.get_search_prefix();
-        let max_results = self.config.search.max_results;
+        let per_page = self.config.search.max_results;
+        let start_index = (page - 1) * per_page + 1;
+        let end_index = page * per_page;
+
+        // 为搜索结果预留 50 个位置
+        let search_count = end_index + 50;
+
         let yt_task = Command::new("yt-dlp")
             .env("PATH", &path)
             .args([
@@ -106,7 +116,9 @@ impl AudioBackend {
                 &self.config.search.cookies_browser,
                 "--dump-json",
                 "--flat-playlist",
-                &format!("{}{}:{}", search_prefix, max_results, keyword),
+                "--playlist-items",
+                &format!("{}-{}", start_index, end_index),
+                &format!("{}{}:{}", search_prefix, search_count, keyword),
             ])
             .output();
 
