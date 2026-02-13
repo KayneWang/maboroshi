@@ -86,7 +86,7 @@ async fn main() -> Result<()> {
     let config = Config::load();
     let _ = Config::save_example();
 
-    let app = Arc::new(Mutex::new(App::new()));
+    let app = Arc::new(Mutex::new(App::new(&config.paths.favorites_file)));
 
     {
         let mut app_lock = app.lock().await;
@@ -145,7 +145,8 @@ async fn main() -> Result<()> {
                         // 搜索结果状态下的键盘操作
                         match key.code {
                             KeyCode::Char('q') => {
-                                let _ = std::process::Command::new("pkill").arg("mpv").output();
+                                drop(app_lock);
+                                player.quit().await;
                                 break;
                             }
                             KeyCode::Esc => {
@@ -182,7 +183,8 @@ async fn main() -> Result<()> {
                     } else {
                         match key.code {
                             KeyCode::Char('q') => {
-                                let _ = std::process::Command::new("pkill").arg("mpv").output();
+                                drop(app_lock);
+                                player.quit().await;
                                 break;
                             }
                             KeyCode::Char('s') => {

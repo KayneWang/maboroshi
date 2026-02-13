@@ -4,10 +4,10 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 #[derive(Clone)]
@@ -44,37 +44,35 @@ impl AudioBackend {
         }
     }
 
-    fn get_cached_url(&self, keyword: &str) -> Option<String> {
-        if let Ok(cache) = self.cache.lock() {
-            if let Some(cached) = cache.get(keyword) {
-                if self.is_cache_valid(cached.cached_at) {
-                    return Some(cached.url.clone());
-                }
+    async fn get_cached_url(&self, keyword: &str) -> Option<String> {
+        let cache = self.cache.lock().await;
+        if let Some(cached) = cache.get(keyword) {
+            if self.is_cache_valid(cached.cached_at) {
+                return Some(cached.url.clone());
             }
         }
         None
     }
 
-    fn cache_url(&self, keyword: String, url: String) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(
-                keyword,
-                CachedSong {
-                    url,
-                    cached_at: SystemTime::now(),
-                },
-            );
+    async fn cache_url(&self, keyword: String, url: String) {
+        let mut cache = self.cache.lock().await;
+        cache.insert(
+            keyword,
+            CachedSong {
+                url,
+                cached_at: SystemTime::now(),
+            },
+        );
 
-            // 限制缓存大小
-            if cache.len() > self.config.cache.url_cache_size {
-                // 找到最旧的条目并删除
-                if let Some(oldest_key) = cache
-                    .iter()
-                    .min_by_key(|(_, v)| v.cached_at)
-                    .map(|(k, _)| k.clone())
-                {
-                    cache.remove(&oldest_key);
-                }
+        // 限制缓存大小
+        if cache.len() > self.config.cache.url_cache_size {
+            // 找到最旧的条目并删除
+            if let Some(oldest_key) = cache
+                .iter()
+                .min_by_key(|(_, v)| v.cached_at)
+                .map(|(k, _)| k.clone())
+            {
+                cache.remove(&oldest_key);
             }
         }
     }
@@ -169,7 +167,7 @@ impl AudioBackend {
     {
         // 清理旧进程和 socket
         log_fn("清理旧进程和 socket".to_string());
-        let _ = std::process::Command::new("pkill").arg("mpv").output();
+        self.quit().await;
         if Path::new(&self.socket_path).exists() {
             let _ = std::fs::remove_file(&self.socket_path);
         }
@@ -177,7 +175,7 @@ impl AudioBackend {
         let path = Self::get_extended_path();
 
         // 1. 检查缓存
-        let stream_url = if let Some(cached_url) = self.get_cached_url(keyword) {
+        let stream_url = if let Some(cached_url) = self.get_cached_url(keyword).await {
             log_fn("✓ 使用缓存的 URL".to_string());
             cached_url
         } else {
@@ -197,8 +195,8 @@ impl AudioBackend {
                 .output();
 
             log_fn("等待 yt-dlp 响应...".to_string());
-            let play_timeout = self.config.network.play_timeout;
-            let yt_output = match timeout(Duration::from_secs(play_timeout), yt_task).await {
+            let search_timeout = self.config.search.timeout;
+            let yt_output = match timeout(Duration::from_secs(search_timeout), yt_task).await {
                 Ok(Ok(output)) => {
                     log_fn("yt-dlp 执行完成".to_string());
                     if !output.stderr.is_empty() {
@@ -215,7 +213,7 @@ impl AudioBackend {
                     return Err(e.into());
                 }
                 Err(_) => {
-                    log_fn(format!("yt-dlp 超时（{}秒）", play_timeout));
+                    log_fn(format!("yt-dlp 超时（{}秒）", search_timeout));
                     return Err(anyhow::anyhow!("yt-dlp 超时"));
                 }
             };
@@ -233,7 +231,7 @@ impl AudioBackend {
             ));
 
             // 3. 缓存 URL
-            self.cache_url(keyword.to_string(), url.clone());
+            self.cache_url(keyword.to_string(), url.clone()).await;
             log_fn("✓ 已缓存 URL".to_string());
 
             url
@@ -298,74 +296,47 @@ impl AudioBackend {
         Ok(())
     }
 
-    pub async fn is_playing(&self) -> Result<bool> {
+    /// 获取 mpv 播放状态。返回 Some(true) 表示暂停，Some(false) 表示播放中，None 表示无法连接（已停止）
+    pub async fn get_pause_state(&self) -> Option<bool> {
         if !Path::new(&self.socket_path).exists() {
-            return Ok(false);
+            return None;
         }
 
         let cmd = serde_json::json!({ "command": ["get_property", "pause"] });
-        match tokio::net::UnixStream::connect(&self.socket_path).await {
-            Ok(mut stream) => {
-                if stream
-                    .write_all(format!("{}\n", cmd).as_bytes())
-                    .await
-                    .is_err()
-                {
-                    return Ok(false);
-                }
+        let mut stream = match tokio::net::UnixStream::connect(&self.socket_path).await {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
 
-                let mut buf = [0; 1024];
-                match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await
-                {
-                    Ok(Ok(n)) if n > 0 => {
-                        if let Ok(resp) = serde_json::from_slice::<Value>(&buf[..n]) {
-                            // pause 为 false 表示正在播放
-                            return Ok(!resp["data"].as_bool().unwrap_or(true));
-                        }
-                        Ok(false)
-                    }
-                    _ => Ok(false),
-                }
-            }
-            Err(_) => Ok(false),
-        }
-    }
-
-    pub async fn is_paused(&self) -> Result<bool> {
-        if !Path::new(&self.socket_path).exists() {
-            return Ok(false);
+        if stream
+            .write_all(format!("{}\n", cmd).as_bytes())
+            .await
+            .is_err()
+        {
+            return None;
         }
 
-        let cmd = serde_json::json!({ "command": ["get_property", "pause"] });
-        match tokio::net::UnixStream::connect(&self.socket_path).await {
-            Ok(mut stream) => {
-                if stream
-                    .write_all(format!("{}\n", cmd).as_bytes())
-                    .await
-                    .is_err()
-                {
-                    return Ok(false);
+        let mut buf = [0; 1024];
+        match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => {
+                if let Ok(resp) = serde_json::from_slice::<Value>(&buf[..n]) {
+                    return resp["data"].as_bool();
                 }
-
-                let mut buf = [0; 1024];
-                match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await
-                {
-                    Ok(Ok(n)) if n > 0 => {
-                        if let Ok(resp) = serde_json::from_slice::<Value>(&buf[..n]) {
-                            // pause 为 true 表示处于暂停状态
-                            return Ok(resp["data"].as_bool().unwrap_or(false));
-                        }
-                        Ok(false)
-                    }
-                    _ => Ok(false),
-                }
+                None
             }
-            Err(_) => Ok(false),
+            _ => None,
         }
     }
 
     pub async fn seek(&self, seconds: i32) -> Result<()> {
         self.send_command(vec!["seek", &seconds.to_string(), "relative"])
             .await
+    }
+
+    pub async fn quit(&self) {
+        // 优先通过 IPC socket 优雅退出 mpv
+        let _ = self.send_command(vec!["quit"]).await;
+        // 清理 socket 文件
+        let _ = std::fs::remove_file(&self.socket_path);
     }
 }

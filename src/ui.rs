@@ -157,8 +157,13 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     } else {
         0
     };
-    let recent_logs = &app.logs[log_start..];
-    let log_text = recent_logs.join("\n");
+    let log_text: String = app
+        .logs
+        .iter()
+        .skip(log_start)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let logs = Paragraph::new(log_text)
         .block(Block::default().title("📋 日志").borders(Borders::ALL))

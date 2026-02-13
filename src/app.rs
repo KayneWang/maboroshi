@@ -1,13 +1,14 @@
 use crate::audio::SearchResult;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub enum PlayerStatus {
     Waiting,
     Searching,
-    SearchResults, // 新增：显示搜索结果状态
+    SearchResults,
     Playing,
     Paused,
     Error(String),
@@ -36,7 +37,7 @@ pub struct App {
     pub status: PlayerStatus,
     pub current_song: String,
     pub progress: f64,
-    pub logs: Vec<String>,
+    pub logs: VecDeque<String>,
     pub input_mode: bool,
     pub input_buffer: String,
     pub favorites: Vec<FavoriteItem>,
@@ -51,17 +52,21 @@ pub struct App {
     pub total_pages: usize,
     pub search_cache: HashMap<usize, Vec<SearchResult>>,
     pub is_loading_page: bool,
+    favorites_path: PathBuf,
 }
 
 impl App {
-    fn get_favorites_path() -> PathBuf {
+    fn resolve_favorites_path(configured_path: &str) -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".maboroshi_favorites.json")
+        if configured_path.starts_with('~') {
+            PathBuf::from(configured_path.replacen('~', &home, 1))
+        } else {
+            PathBuf::from(configured_path)
+        }
     }
 
-    fn load_favorites() -> Vec<FavoriteItem> {
-        let path = Self::get_favorites_path();
-        if let Ok(content) = fs::read_to_string(&path) {
+    fn load_favorites(path: &PathBuf) -> Vec<FavoriteItem> {
+        if let Ok(content) = fs::read_to_string(path) {
             if let Ok(data) = serde_json::from_str::<FavoritesData>(&content) {
                 return data.items;
             }
@@ -69,21 +74,21 @@ impl App {
         Vec::new()
     }
 
-    fn save_favorites(favorites: &[FavoriteItem]) {
-        let path = Self::get_favorites_path();
+    fn save_favorites(favorites: &[FavoriteItem], path: &PathBuf) {
         let data = FavoritesData {
             items: favorites.to_vec(),
         };
         if let Ok(json) = serde_json::to_string_pretty(&data) {
-            let _ = fs::write(&path, json);
+            let _ = fs::write(path, json);
         }
     }
 
-    pub fn new() -> Self {
-        let favorites = Self::load_favorites();
-        let mut logs = vec!["应用启动".to_string()];
+    pub fn new(favorites_file: &str) -> Self {
+        let favorites_path = Self::resolve_favorites_path(favorites_file);
+        let favorites = Self::load_favorites(&favorites_path);
+        let mut logs = VecDeque::from(vec!["应用启动".to_string()]);
         if !favorites.is_empty() {
-            logs.push(format!("加载了 {} 首收藏", favorites.len()));
+            logs.push_back(format!("加载了 {} 首收藏", favorites.len()));
         }
 
         Self {
@@ -106,14 +111,15 @@ impl App {
             total_pages: 1,
             search_cache: HashMap::new(),
             is_loading_page: false,
+            favorites_path,
         }
     }
 
     pub fn add_log(&mut self, message: String) {
-        self.logs.push(message);
+        self.logs.push_back(message);
         // 只保留最近 50 条日志
         if self.logs.len() > 50 {
-            self.logs.remove(0);
+            self.logs.pop_front();
         }
     }
 
@@ -143,7 +149,7 @@ impl App {
         }
 
         // 自动保存收藏列表
-        Self::save_favorites(&self.favorites);
+        Self::save_favorites(&self.favorites, &self.favorites_path);
     }
 
     pub fn is_favorite(&self) -> bool {
@@ -167,7 +173,7 @@ impl App {
                 self.add_log(format!("已收藏: {} ({})", title, self.current_source));
             }
 
-            Self::save_favorites(&self.favorites);
+            Self::save_favorites(&self.favorites, &self.favorites_path);
         }
     }
 
@@ -266,13 +272,7 @@ impl App {
             self.status,
             PlayerStatus::Searching | PlayerStatus::SearchResults
         ) {
-            self.saved_status = Some(match &self.status {
-                PlayerStatus::Playing => PlayerStatus::Playing,
-                PlayerStatus::Paused => PlayerStatus::Paused,
-                PlayerStatus::Waiting => PlayerStatus::Waiting,
-                PlayerStatus::Error(e) => PlayerStatus::Error(e.clone()),
-                _ => PlayerStatus::Waiting,
-            });
+            self.saved_status = Some(self.status.clone());
         }
     }
 

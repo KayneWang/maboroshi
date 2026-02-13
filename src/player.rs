@@ -51,7 +51,7 @@ impl Player {
                     } else {
                         let count = results.len();
                         a.current_page = 1;
-                        a.total_pages = 999;
+                        a.total_pages = usize::MAX;
                         a.cache_page(1, results.clone());
                         a.set_search_results(results, keyword_clone);
                         a.add_log(format!("找到 {} 个结果，使用 ↑↓ 选择，Enter 播放", count));
@@ -214,24 +214,22 @@ impl Player {
                 }
             }
 
-            // 检查播放状态并同步到应用状态
-            if let Ok(is_paused) = self.audio.is_paused().await {
-                if is_paused {
+            // 检查播放状态并同步到应用状态（单次 socket 查询）
+            match self.audio.get_pause_state().await {
+                Some(true) => {
+                    // mpv 处于暂停状态
                     if !matches!(app_lock.status, PlayerStatus::Paused) {
                         app_lock.status = PlayerStatus::Paused;
                     }
-                    return;
-                } else {
+                }
+                Some(false) => {
+                    // mpv 正在播放
                     if matches!(app_lock.status, PlayerStatus::Paused) {
                         app_lock.status = PlayerStatus::Playing;
                     }
                 }
-            }
-
-            // 检查是否播放结束
-            if let Ok(is_playing) = self.audio.is_playing().await {
-                if !is_playing {
-                    // 播放结束（歌曲播完），尝试播放下一首
+                None => {
+                    // 无法连接 mpv，播放已结束，尝试播放下一首
                     if let Some(next_song) = app_lock.get_next_song() {
                         app_lock.add_log(format!("自动播放下一首: {}", next_song));
                         drop(app_lock);
@@ -243,6 +241,10 @@ impl Player {
                 }
             }
         }
+    }
+
+    pub async fn quit(&self) {
+        self.audio.quit().await;
     }
 
     pub async fn seek_forward(&self) {
