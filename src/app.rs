@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 #[derive(Clone)]
 pub enum PlayerStatus {
@@ -19,6 +20,7 @@ pub enum PlayMode {
     Single,     // 单曲循环
     ListLoop,   // 列表循环
     Sequential, // 顺序播放（播完停止）
+    Shuffle,    // 随机播放
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -101,7 +103,7 @@ impl App {
             input_buffer: String::new(),
             favorites,
             selected_favorite: 0,
-            play_mode: PlayMode::ListLoop,
+            play_mode: PlayMode::Shuffle,
             search_results: Vec::new(),
             selected_search_result: 0,
             saved_status: None,
@@ -286,14 +288,16 @@ impl App {
 
     pub fn toggle_play_mode(&mut self) {
         self.play_mode = match self.play_mode {
+            PlayMode::Shuffle => PlayMode::Single,
             PlayMode::Single => PlayMode::ListLoop,
             PlayMode::ListLoop => PlayMode::Sequential,
-            PlayMode::Sequential => PlayMode::Single,
+            PlayMode::Sequential => PlayMode::Shuffle,
         };
         let mode_text = match self.play_mode {
             PlayMode::Single => "单曲循环",
             PlayMode::ListLoop => "列表循环",
             PlayMode::Sequential => "顺序播放",
+            PlayMode::Shuffle => "随机播放",
         };
         self.add_log(format!("播放模式: {}", mode_text));
     }
@@ -303,7 +307,16 @@ impl App {
             PlayMode::Single => "🔂",
             PlayMode::ListLoop => "🔁",
             PlayMode::Sequential => "▶️",
+            PlayMode::Shuffle => "🔀",
         }
+    }
+
+    fn simple_random(&self, max: usize) -> usize {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as usize;
+        nanos % max
     }
 
     pub fn get_next_song(&mut self) -> Option<String> {
@@ -315,6 +328,30 @@ impl App {
                 } else {
                     None
                 }
+            }
+            PlayMode::Shuffle => {
+                // 随机播放：从收藏列表中随机选一首（避开当前歌曲）
+                if self.favorites.is_empty() {
+                    return None;
+                }
+                if self.favorites.len() == 1 {
+                    self.selected_favorite = 0;
+                    return Some(self.favorites[0].title.clone());
+                }
+                // 避免连续播放同一首
+                let mut idx = self.simple_random(self.favorites.len());
+                if let Some(current_idx) = self
+                    .favorites
+                    .iter()
+                    .position(|item| item.title == self.current_song)
+                {
+                    while idx == current_idx {
+                        idx = self.simple_random(self.favorites.len());
+                    }
+                }
+                self.selected_favorite = idx;
+                self.add_log(format!("随机播放，索引: {}", idx));
+                Some(self.favorites[idx].title.clone())
             }
             PlayMode::ListLoop | PlayMode::Sequential => {
                 // 列表循环或顺序播放：播放下一首收藏

@@ -127,9 +127,10 @@ maboroshi --help       # 显示帮助信息
 
 ### 播放模式
 
-- **🔂 单曲循环** - 重复播放当前歌曲
-- **🔁 列表循环** - 循环播放收藏列表
-- **▶️ 顺序播放** - 顺序播放收藏列表，播完停止
+- **随机播放** - 随机播放收藏列表中的歌曲（默认）
+- **单曲循环** - 重复播放当前歌曲
+- **列表循环** - 循环播放收藏列表
+- **顺序播放** - 顺序播放收藏列表，播完停止
 
 ### 使用流程
 
@@ -184,7 +185,7 @@ url_cache_ttl = 7200  # 2 小时
 play_timeout = 10
 
 [playback]
-default_mode = "list_loop"  # single, list_loop, sequential
+default_mode = "shuffle"  # shuffle, single, list_loop, sequential
 
 [paths]
 socket_path = "/tmp/maboroshi.sock"

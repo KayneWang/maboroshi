@@ -40,8 +40,8 @@ url_cache_ttl = 7200
 play_timeout = 10
 
 [playback]
-# 默认播放模式：single（单曲循环）、list_loop（列表循环）、sequential（顺序播放）
-default_mode = "list_loop"
+# 默认播放模式：shuffle（随机播放）、single（单曲循环）、list_loop（列表循环）、sequential（顺序播放）
+default_mode = "shuffle"
 
 # 快进/快退秒数（使用左右方向键时跳转的秒数）
 seek_seconds = 10

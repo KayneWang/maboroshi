@@ -88,7 +88,7 @@ fn default_play_timeout() -> u64 {
 }
 
 fn default_play_mode() -> String {
-    "list_loop".to_string()
+    "shuffle".to_string()
 }
 
 fn default_seek_seconds() -> i32 {
