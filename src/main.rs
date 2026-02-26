@@ -25,6 +25,30 @@ use tokio::sync::Mutex;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+struct TerminalCleanupGuard {
+    active: bool,
+}
+
+impl TerminalCleanupGuard {
+    fn activate() -> Self {
+        Self { active: true }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for TerminalCleanupGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = disable_raw_mode();
+            let mut stdout = io::stdout();
+            let _ = execute!(stdout, LeaveAlternateScreen);
+        }
+    }
+}
+
 fn print_version() {
     println!("maboroshi v{}", VERSION);
 }
@@ -80,6 +104,7 @@ async fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    let mut terminal_cleanup_guard = TerminalCleanupGuard::activate();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -91,12 +116,21 @@ async fn main() -> Result<()> {
     {
         let mut app_lock = app.lock().await;
         app_lock.current_source = config.search.source.clone();
+        let play_mode_ok = app_lock.set_play_mode_from_config(&config.playback.default_mode);
         app_lock.add_log(format!("配置加载完成"));
         app_lock.add_log(format!(
             "数据源: {} ({})",
             config.search.source,
             config.get_search_prefix()
         ));
+        if play_mode_ok {
+            app_lock.add_log(format!("默认播放模式: {}", config.playback.default_mode));
+        } else {
+            app_lock.add_log(format!(
+                "默认播放模式无效: {}，已回退为 shuffle",
+                config.playback.default_mode
+            ));
+        }
         app_lock.add_log(format!(
             "缓存设置: {} 首歌曲, {} 秒有效期",
             config.cache.url_cache_size, config.cache.url_cache_ttl
@@ -109,146 +143,180 @@ async fn main() -> Result<()> {
     let tick_rate = Duration::from_millis(200);
     let mut last_tick = Instant::now();
 
+    enum PendingAction {
+        Search(String),
+        PlaySelectedResult,
+        SearchAndPlay(String),
+        TogglePause,
+        SeekForward,
+        SeekBackward,
+        NextPage,
+        PrevPage,
+        Quit,
+    }
+
     loop {
         {
             let mut app_lock = app.lock().await;
             terminal.draw(|f| ui::render(&mut app_lock, f))?;
-
-            if event::poll(Duration::from_millis(10))? {
-                if let Event::Key(key) = event::read()? {
-                    if app_lock.input_mode {
-                        match key.code {
-                            KeyCode::Enter => {
-                                if !app_lock.input_buffer.is_empty() {
-                                    let keyword = app_lock.input_buffer.clone();
-                                    app_lock.input_mode = false;
-                                    app_lock.input_buffer.clear();
-                                    drop(app_lock);
-                                    player.search(keyword).await;
-                                    continue;
-                                }
-                            }
-                            KeyCode::Esc => {
-                                app_lock.input_mode = false;
-                                app_lock.input_buffer.clear();
-                                app_lock.add_log("取消搜索".to_string());
-                            }
-                            KeyCode::Backspace => {
-                                app_lock.input_buffer.pop();
-                            }
-                            KeyCode::Char(c) => {
-                                app_lock.input_buffer.push(c);
-                            }
-                            _ => {}
-                        }
-                    } else if matches!(app_lock.status, PlayerStatus::SearchResults) {
-                        // 搜索结果状态下的键盘操作
-                        match key.code {
-                            KeyCode::Char('q') => {
-                                drop(app_lock);
-                                player.quit().await;
-                                break;
-                            }
-                            KeyCode::Esc => {
-                                app_lock.clear_search_results();
-                                app_lock.restore_status_after_search();
-                                app_lock.add_log("取消搜索结果".to_string());
-                            }
-                            KeyCode::Up => {
-                                app_lock.select_prev_search_result();
-                            }
-                            KeyCode::Down => {
-                                app_lock.select_next_search_result();
-                            }
-                            KeyCode::Enter => {
-                                drop(app_lock);
-                                player.play_selected_result().await;
-                                continue;
-                            }
-                            KeyCode::Char('f') => {
-                                app_lock.toggle_favorite_from_search_result();
-                            }
-                            KeyCode::Right => {
-                                drop(app_lock);
-                                player.next_page().await;
-                                continue;
-                            }
-                            KeyCode::Left => {
-                                drop(app_lock);
-                                player.prev_page().await;
-                                continue;
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        match key.code {
-                            KeyCode::Char('q') => {
-                                drop(app_lock);
-                                player.quit().await;
-                                break;
-                            }
-                            KeyCode::Char('s') => {
-                                app_lock.input_mode = true;
-                                app_lock.input_buffer.clear();
-                                app_lock.add_log("进入搜索模式".to_string());
-                            }
-                            KeyCode::Char('f') => {
-                                app_lock.toggle_favorite();
-                            }
-                            KeyCode::Char('m') => {
-                                app_lock.toggle_play_mode();
-                            }
-                            KeyCode::Up => {
-                                app_lock.select_prev_favorite();
-                            }
-                            KeyCode::Down => {
-                                app_lock.select_next_favorite();
-                            }
-                            KeyCode::Enter => {
-                                if let Some(item) = app_lock.get_selected_favorite() {
-                                    let song = item.title.clone();
-                                    let source = item.source.clone();
-                                    app_lock.add_log(format!("从收藏播放: {} [{}]", song, source));
-                                    app_lock.current_source = source;
-                                    drop(app_lock);
-                                    player.search_and_play(song).await;
-                                    continue;
-                                }
-                            }
-                            KeyCode::Char(' ') => {
-                                drop(app_lock);
-                                player.toggle_pause().await;
-                                continue;
-                            }
-                            KeyCode::Right => {
-                                if matches!(
-                                    app_lock.status,
-                                    PlayerStatus::Playing | PlayerStatus::Paused
-                                ) {
-                                    drop(app_lock);
-                                    player.seek_forward().await;
-                                    continue;
-                                }
-                            }
-                            KeyCode::Left => {
-                                if matches!(
-                                    app_lock.status,
-                                    PlayerStatus::Playing | PlayerStatus::Paused
-                                ) {
-                                    drop(app_lock);
-                                    player.seek_backward().await;
-                                    continue;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
             if !app_lock.running {
                 break;
             }
+        }
+
+        let mut pending_action = None;
+
+        if event::poll(Duration::from_millis(10))? {
+            if let Event::Key(key) = event::read()? {
+                let mut app_lock = app.lock().await;
+                if app_lock.input_mode {
+                    match key.code {
+                        KeyCode::Enter => {
+                            if !app_lock.input_buffer.is_empty() {
+                                let keyword = app_lock.input_buffer.clone();
+                                app_lock.input_mode = false;
+                                app_lock.input_buffer.clear();
+                                pending_action = Some(PendingAction::Search(keyword));
+                            }
+                        }
+                        KeyCode::Esc => {
+                            app_lock.input_mode = false;
+                            app_lock.input_buffer.clear();
+                            app_lock.add_log("取消搜索".to_string());
+                        }
+                        KeyCode::Backspace => {
+                            app_lock.input_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app_lock.input_buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                } else if matches!(app_lock.status, PlayerStatus::SearchResults) {
+                    // 搜索结果状态下的键盘操作
+                    match key.code {
+                        KeyCode::Char('q') => {
+                            pending_action = Some(PendingAction::Quit);
+                        }
+                        KeyCode::Esc => {
+                            app_lock.clear_search_results();
+                            app_lock.restore_status_after_search();
+                            app_lock.add_log("取消搜索结果".to_string());
+                        }
+                        KeyCode::Up => {
+                            app_lock.select_prev_search_result();
+                        }
+                        KeyCode::Down => {
+                            app_lock.select_next_search_result();
+                        }
+                        KeyCode::Enter => {
+                            pending_action = Some(PendingAction::PlaySelectedResult);
+                        }
+                        KeyCode::Char('f') => {
+                            app_lock.toggle_favorite_from_search_result();
+                        }
+                        KeyCode::Right => {
+                            pending_action = Some(PendingAction::NextPage);
+                        }
+                        KeyCode::Left => {
+                            pending_action = Some(PendingAction::PrevPage);
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Char('q') => {
+                            pending_action = Some(PendingAction::Quit);
+                        }
+                        KeyCode::Char('s') => {
+                            app_lock.input_mode = true;
+                            app_lock.input_buffer.clear();
+                            app_lock.add_log("进入搜索模式".to_string());
+                        }
+                        KeyCode::Char('f') => {
+                            app_lock.toggle_favorite();
+                        }
+                        KeyCode::Char('m') => {
+                            app_lock.toggle_play_mode();
+                        }
+                        KeyCode::Up => {
+                            app_lock.select_prev_favorite();
+                        }
+                        KeyCode::Down => {
+                            app_lock.select_next_favorite();
+                        }
+                        KeyCode::Enter => {
+                            if let Some(item) = app_lock.get_selected_favorite() {
+                                let song = item.title.clone();
+                                let source = item.source.clone();
+                                app_lock.add_log(format!("从收藏播放: {} [{}]", song, source));
+                                app_lock.current_source = source;
+                                pending_action = Some(PendingAction::SearchAndPlay(song));
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            pending_action = Some(PendingAction::TogglePause);
+                        }
+                        KeyCode::Right => {
+                            if matches!(
+                                app_lock.status,
+                                PlayerStatus::Playing | PlayerStatus::Paused
+                            ) {
+                                pending_action = Some(PendingAction::SeekForward);
+                            }
+                        }
+                        KeyCode::Left => {
+                            if matches!(
+                                app_lock.status,
+                                PlayerStatus::Playing | PlayerStatus::Paused
+                            ) {
+                                pending_action = Some(PendingAction::SeekBackward);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        match pending_action {
+            Some(PendingAction::Search(keyword)) => {
+                player.search(keyword).await;
+                continue;
+            }
+            Some(PendingAction::PlaySelectedResult) => {
+                player.play_selected_result().await;
+                continue;
+            }
+            Some(PendingAction::SearchAndPlay(song)) => {
+                player.search_and_play(song).await;
+                continue;
+            }
+            Some(PendingAction::TogglePause) => {
+                player.toggle_pause().await;
+                continue;
+            }
+            Some(PendingAction::SeekForward) => {
+                player.seek_forward().await;
+                continue;
+            }
+            Some(PendingAction::SeekBackward) => {
+                player.seek_backward().await;
+                continue;
+            }
+            Some(PendingAction::NextPage) => {
+                player.next_page().await;
+                continue;
+            }
+            Some(PendingAction::PrevPage) => {
+                player.prev_page().await;
+                continue;
+            }
+            Some(PendingAction::Quit) => {
+                player.quit().await;
+                break;
+            }
+            None => {}
         }
 
         if last_tick.elapsed() >= tick_rate {
@@ -257,6 +325,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    terminal_cleanup_guard.disarm();
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())

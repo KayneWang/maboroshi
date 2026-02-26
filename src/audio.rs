@@ -1,7 +1,8 @@
 use crate::config::Config;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, SystemTime};
@@ -27,7 +28,35 @@ pub struct SearchResult {
     pub title: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PauseState {
+    Paused,
+    Playing,
+    Stopped,
+}
+
+#[derive(Debug)]
+pub enum PauseStateError {
+    Io(std::io::Error),
+    Timeout,
+    InvalidResponse,
+}
+
+impl std::fmt::Display for PauseStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PauseStateError::Io(e) => write!(f, "io error: {}", e),
+            PauseStateError::Timeout => write!(f, "timeout while querying pause state"),
+            PauseStateError::InvalidResponse => write!(f, "invalid pause state response"),
+        }
+    }
+}
+
+impl std::error::Error for PauseStateError {}
+
 impl AudioBackend {
+    const YTDLP_STDERR_LOG_MAX_LINES: usize = 6;
+
     pub fn new(config: Config) -> Self {
         Self {
             socket_path: config.paths.socket_path.clone(),
@@ -87,6 +116,40 @@ impl AudioBackend {
         format!("/opt/homebrew/bin:/usr/local/bin:{}", current_path)
     }
 
+    fn build_ytdlp_command(&self, path: &str) -> Command {
+        let mut cmd = Command::new("yt-dlp");
+        // 当超时或上层任务被取消时，确保子进程不会残留。
+        cmd.kill_on_drop(true);
+        cmd.env("PATH", path)
+            .arg("--cookies-from-browser")
+            .arg(&self.config.search.cookies_browser);
+        cmd
+    }
+
+    fn log_ytdlp_stderr<F>(stderr: &[u8], log_fn: &mut F)
+    where
+        F: FnMut(String),
+    {
+        let stderr = String::from_utf8_lossy(stderr);
+        let mut emitted = 0usize;
+        let mut total = 0usize;
+
+        for line in stderr.lines() {
+            total += 1;
+            if emitted < Self::YTDLP_STDERR_LOG_MAX_LINES {
+                log_fn(format!("[yt-dlp] {}", line));
+                emitted += 1;
+            }
+        }
+
+        if total > Self::YTDLP_STDERR_LOG_MAX_LINES {
+            log_fn(format!(
+                "[yt-dlp] ... 其余 {} 行日志已省略",
+                total - Self::YTDLP_STDERR_LOG_MAX_LINES
+            ));
+        }
+    }
+
     pub async fn search<F>(
         &self,
         keyword: &str,
@@ -107,18 +170,15 @@ impl AudioBackend {
         // 为搜索结果预留 50 个位置
         let search_count = end_index + 50;
 
-        let yt_task = Command::new("yt-dlp")
-            .env("PATH", &path)
-            .args([
-                "--cookies-from-browser",
-                &self.config.search.cookies_browser,
-                "--dump-json",
-                "--flat-playlist",
-                "--playlist-items",
-                &format!("{}-{}", start_index, end_index),
-                &format!("{}{}:{}", search_prefix, search_count, keyword),
-            ])
-            .output();
+        let mut yt_cmd = self.build_ytdlp_command(&path);
+        yt_cmd.args([
+            "--dump-json".to_string(),
+            "--flat-playlist".to_string(),
+            "--playlist-items".to_string(),
+            format!("{}-{}", start_index, end_index),
+            format!("{}{}:{}", search_prefix, search_count, keyword),
+        ]);
+        let yt_task = yt_cmd.output();
 
         log_fn("等待 yt-dlp 响应...".to_string());
         let search_timeout = self.config.search.timeout;
@@ -127,9 +187,10 @@ impl AudioBackend {
                 log_fn(format!("yt-dlp 执行完成，退出码: {}", output.status));
 
                 // 打印 stderr 中的所有日志
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                for line in stderr.lines() {
-                    log_fn(format!("[yt-dlp] {}", line));
+                Self::log_ytdlp_stderr(&output.stderr, &mut log_fn);
+
+                if !output.status.success() {
+                    return Err(anyhow::anyhow!("yt-dlp 搜索失败: {}", output.status));
                 }
 
                 output
@@ -182,30 +243,26 @@ impl AudioBackend {
             // 2. 缓存未命中，执行搜索
             log_fn(format!("开始搜索: {}", keyword));
             let search_prefix = self.config.get_search_prefix();
-            let yt_task = Command::new("yt-dlp")
-                .env("PATH", &path)
-                .args([
-                    "--cookies-from-browser",
-                    &self.config.search.cookies_browser,
-                    "--get-url",
-                    "-f",
-                    "bestaudio",
-                    &format!("{}1:{}", search_prefix, keyword),
-                ])
-                .output();
+            let mut yt_cmd = self.build_ytdlp_command(&path);
+            yt_cmd.args([
+                "--get-url".to_string(),
+                "-f".to_string(),
+                "bestaudio".to_string(),
+                format!("{}1:{}", search_prefix, keyword),
+            ]);
+            let yt_task = yt_cmd.output();
 
             log_fn("等待 yt-dlp 响应...".to_string());
             let search_timeout = self.config.search.timeout;
             let yt_output = match timeout(Duration::from_secs(search_timeout), yt_task).await {
                 Ok(Ok(output)) => {
                     log_fn("yt-dlp 执行完成".to_string());
-                    if !output.stderr.is_empty() {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        log_fn(format!(
-                            "stderr: {}",
-                            stderr.lines().take(3).collect::<Vec<_>>().join(" | ")
-                        ));
+                    Self::log_ytdlp_stderr(&output.stderr, &mut log_fn);
+
+                    if !output.status.success() {
+                        return Err(anyhow::anyhow!("yt-dlp 获取音频流失败: {}", output.status));
                     }
+
                     output
                 }
                 Ok(Err(e)) => {
@@ -253,9 +310,11 @@ impl AudioBackend {
 
         log_fn("mpv 已启动，等待 socket 就绪...".to_string());
 
-        // 等待 socket 文件创建（最多等待 3 秒）
+        // 等待 socket 文件创建（最多等待 network.play_timeout 秒）
         let socket_path = self.socket_path.clone();
-        for i in 0..30 {
+        let wait_timeout_secs = self.config.network.play_timeout.max(1);
+        let max_attempts = (wait_timeout_secs * 10) as usize;
+        for i in 0..max_attempts {
             if Path::new(&socket_path).exists() {
                 log_fn(format!("socket 就绪 ({}ms)", i * 100));
                 break;
@@ -271,13 +330,29 @@ impl AudioBackend {
     }
 
     pub async fn get_progress(&self) -> Result<f64> {
+        let io_timeout = Duration::from_millis(100);
         let cmd = serde_json::json!({ "command": ["get_property", "percent-pos"] });
-        let mut stream = tokio::net::UnixStream::connect(&self.socket_path).await?;
-        stream.write_all(format!("{}\n", cmd).as_bytes()).await?;
+        let mut stream = timeout(
+            io_timeout,
+            tokio::net::UnixStream::connect(&self.socket_path),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("连接 mpv socket 超时"))?
+        .with_context(|| format!("无法连接 mpv socket: {}", self.socket_path))?;
+        timeout(
+            io_timeout,
+            stream.write_all(format!("{}\n", cmd).as_bytes()),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("发送进度查询命令超时"))?
+        .context("发送进度查询命令失败")?;
 
         let mut buf = [0; 1024];
-        let n = stream.read(&mut buf).await?;
-        let resp: Value = serde_json::from_slice(&buf[..n])?;
+        let n = timeout(io_timeout, stream.read(&mut buf))
+            .await
+            .map_err(|_| anyhow::anyhow!("读取进度响应超时"))?
+            .context("读取进度响应失败")?;
+        let resp: Value = serde_json::from_slice(&buf[..n]).context("解析进度响应失败")?;
 
         // mpv 返回格式: {"data": 12.34, "request_id": 0, "error": "success"}
         if let Some(percent) = resp["data"].as_f64() {
@@ -289,42 +364,65 @@ impl AudioBackend {
 
     pub async fn send_command(&self, args: Vec<&str>) -> Result<()> {
         let cmd = serde_json::json!({ "command": args });
-        if Path::new(&self.socket_path).exists() {
-            let mut stream = tokio::net::UnixStream::connect(&self.socket_path).await?;
-            stream.write_all(format!("{}\n", cmd).as_bytes()).await?;
-        }
+        let mut stream = tokio::net::UnixStream::connect(&self.socket_path)
+            .await
+            .with_context(|| format!("无法连接 mpv socket: {}", self.socket_path))?;
+        stream
+            .write_all(format!("{}\n", cmd).as_bytes())
+            .await
+            .context("发送 mpv IPC 命令失败")?;
         Ok(())
     }
 
-    /// 获取 mpv 播放状态。返回 Some(true) 表示暂停，Some(false) 表示播放中，None 表示无法连接（已停止）
-    pub async fn get_pause_state(&self) -> Option<bool> {
+    /// 获取 mpv 播放状态。
+    /// - Ok(PauseState::Paused): mpv 正在暂停
+    /// - Ok(PauseState::Playing): mpv 正在播放
+    /// - Ok(PauseState::Stopped): 播放器已停止（socket 不存在或连接已断开）
+    /// - Err(...): 临时错误（超时/无效响应等）
+    pub async fn get_pause_state(&self) -> std::result::Result<PauseState, PauseStateError> {
         if !Path::new(&self.socket_path).exists() {
-            return None;
+            return Ok(PauseState::Stopped);
         }
 
         let cmd = serde_json::json!({ "command": ["get_property", "pause"] });
         let mut stream = match tokio::net::UnixStream::connect(&self.socket_path).await {
             Ok(s) => s,
-            Err(_) => return None,
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
+                return Ok(PauseState::Stopped);
+            }
+            Err(e) => return Err(PauseStateError::Io(e)),
         };
 
-        if stream
+        stream
             .write_all(format!("{}\n", cmd).as_bytes())
             .await
-            .is_err()
-        {
-            return None;
-        }
+            .map_err(PauseStateError::Io)?;
 
         let mut buf = [0; 1024];
-        match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await {
-            Ok(Ok(n)) if n > 0 => {
-                if let Ok(resp) = serde_json::from_slice::<Value>(&buf[..n]) {
-                    return resp["data"].as_bool();
-                }
-                None
+        let n = match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await
+        {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => return Err(PauseStateError::Io(e)),
+            Err(_) => return Err(PauseStateError::Timeout),
+        };
+
+        if n == 0 {
+            return Ok(PauseState::Stopped);
+        }
+
+        let resp: Value =
+            serde_json::from_slice(&buf[..n]).map_err(|_| PauseStateError::InvalidResponse)?;
+
+        if let Some(paused) = resp["data"].as_bool() {
+            if paused {
+                Ok(PauseState::Paused)
+            } else {
+                Ok(PauseState::Playing)
             }
-            _ => None,
+        } else if resp["error"].as_str() == Some("property unavailable") {
+            Ok(PauseState::Stopped)
+        } else {
+            Err(PauseStateError::InvalidResponse)
         }
     }
 

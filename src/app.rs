@@ -54,6 +54,8 @@ pub struct App {
     pub total_pages: usize,
     pub search_cache: HashMap<usize, Vec<SearchResult>>,
     pub is_loading_page: bool,
+    request_seq: u64,
+    active_request_id: u64,
     favorites_path: PathBuf,
 }
 
@@ -67,30 +69,77 @@ impl App {
         }
     }
 
-    fn load_favorites(path: &PathBuf) -> Vec<FavoriteItem> {
-        if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(data) = serde_json::from_str::<FavoritesData>(&content) {
-                return data.items;
-            }
-        }
-        Vec::new()
+    fn backup_corrupted_favorites(path: &PathBuf) -> Result<PathBuf, String> {
+        let ts = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let file_name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("favorites.json");
+        let mut backup_path = path.clone();
+        backup_path.set_file_name(format!("{}.corrupt.{}", file_name, ts));
+        fs::rename(path, &backup_path).map_err(|e| {
+            format!(
+                "收藏文件解析失败，且备份失败 ({} -> {}): {}",
+                path.display(),
+                backup_path.display(),
+                e
+            )
+        })?;
+        Ok(backup_path)
     }
 
-    fn save_favorites(favorites: &[FavoriteItem], path: &PathBuf) {
+    fn load_favorites(path: &PathBuf) -> (Vec<FavoriteItem>, Option<String>) {
+        let content = match fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
+            Err(e) => {
+                return (
+                    Vec::new(),
+                    Some(format!("读取收藏文件失败 ({}): {}", path.display(), e)),
+                );
+            }
+        };
+
+        match serde_json::from_str::<FavoritesData>(&content) {
+            Ok(data) => (data.items, None),
+            Err(e) => match Self::backup_corrupted_favorites(path) {
+                Ok(backup_path) => (
+                    Vec::new(),
+                    Some(format!(
+                        "收藏文件已损坏并自动备份到: {}（原因: {}）",
+                        backup_path.display(),
+                        e
+                    )),
+                ),
+                Err(backup_err) => (
+                    Vec::new(),
+                    Some(format!("收藏文件解析失败: {}；{}", e, backup_err)),
+                ),
+            },
+        }
+    }
+
+    fn save_favorites(favorites: &[FavoriteItem], path: &PathBuf) -> Result<(), String> {
         let data = FavoritesData {
             items: favorites.to_vec(),
         };
-        if let Ok(json) = serde_json::to_string_pretty(&data) {
-            let _ = fs::write(path, json);
-        }
+        let json =
+            serde_json::to_string_pretty(&data).map_err(|e| format!("序列化收藏失败: {}", e))?;
+        fs::write(path, json).map_err(|e| format!("保存收藏失败 ({}): {}", path.display(), e))
     }
 
     pub fn new(favorites_file: &str) -> Self {
         let favorites_path = Self::resolve_favorites_path(favorites_file);
-        let favorites = Self::load_favorites(&favorites_path);
+        let (favorites, load_warning) = Self::load_favorites(&favorites_path);
         let mut logs = VecDeque::from(vec!["应用启动".to_string()]);
         if !favorites.is_empty() {
             logs.push_back(format!("加载了 {} 首收藏", favorites.len()));
+        }
+        if let Some(warning) = load_warning {
+            logs.push_back(warning);
         }
 
         Self {
@@ -113,11 +162,16 @@ impl App {
             total_pages: 1,
             search_cache: HashMap::new(),
             is_loading_page: false,
+            request_seq: 0,
+            active_request_id: 0,
             favorites_path,
         }
     }
 
     pub fn add_log(&mut self, message: String) {
+        if self.logs.back().is_some_and(|last| last == &message) {
+            return;
+        }
         self.logs.push_back(message);
         // 只保留最近 50 条日志
         if self.logs.len() > 50 {
@@ -151,7 +205,9 @@ impl App {
         }
 
         // 自动保存收藏列表
-        Self::save_favorites(&self.favorites, &self.favorites_path);
+        if let Err(e) = Self::save_favorites(&self.favorites, &self.favorites_path) {
+            self.add_log(e);
+        }
     }
 
     pub fn is_favorite(&self) -> bool {
@@ -175,7 +231,9 @@ impl App {
                 self.add_log(format!("已收藏: {} ({})", title, self.current_source));
             }
 
-            Self::save_favorites(&self.favorites, &self.favorites_path);
+            if let Err(e) = Self::save_favorites(&self.favorites, &self.favorites_path) {
+                self.add_log(e);
+            }
         }
     }
 
@@ -251,6 +309,18 @@ impl App {
         self.selected_search_result = 0;
         self.last_search_keyword.clear();
         self.search_cache.clear();
+        self.is_loading_page = false;
+    }
+
+    pub fn begin_async_request(&mut self) -> u64 {
+        self.request_seq = self.request_seq.saturating_add(1);
+        self.active_request_id = self.request_seq;
+        self.is_loading_page = false;
+        self.active_request_id
+    }
+
+    pub fn is_active_request(&self, request_id: u64) -> bool {
+        self.active_request_id == request_id
     }
 
     pub fn get_cached_page(&self, page: usize) -> Option<&Vec<SearchResult>> {
@@ -302,6 +372,25 @@ impl App {
         self.add_log(format!("播放模式: {}", mode_text));
     }
 
+    pub fn set_play_mode_from_config(&mut self, mode: &str) -> bool {
+        let normalized = mode.trim().to_lowercase();
+        let parsed = match normalized.as_str() {
+            "single" | "single_loop" | "single-loop" => Some(PlayMode::Single),
+            "list_loop" | "list-loop" | "loop" | "list" => Some(PlayMode::ListLoop),
+            "sequential" | "sequence" | "seq" => Some(PlayMode::Sequential),
+            "shuffle" | "random" => Some(PlayMode::Shuffle),
+            _ => None,
+        };
+
+        if let Some(play_mode) = parsed {
+            self.play_mode = play_mode;
+            true
+        } else {
+            self.play_mode = PlayMode::Shuffle;
+            false
+        }
+    }
+
     pub fn get_play_mode_text(&self) -> &str {
         match self.play_mode {
             PlayMode::Single => "🔂",
@@ -338,19 +427,19 @@ impl App {
                     self.selected_favorite = 0;
                     return Some(self.favorites[0].title.clone());
                 }
-                // 避免连续播放同一首
+                // 避免连续播放同一首（O(1) 选取，无需重试循环）
                 let mut idx = self.simple_random(self.favorites.len());
                 if let Some(current_idx) = self
                     .favorites
                     .iter()
                     .position(|item| item.title == self.current_song)
                 {
-                    while idx == current_idx {
-                        idx = self.simple_random(self.favorites.len());
+                    idx = self.simple_random(self.favorites.len() - 1);
+                    if idx >= current_idx {
+                        idx += 1;
                     }
                 }
                 self.selected_favorite = idx;
-                self.add_log(format!("随机播放，索引: {}", idx));
                 Some(self.favorites[idx].title.clone())
             }
             PlayMode::ListLoop | PlayMode::Sequential => {
@@ -365,11 +454,9 @@ impl App {
                     .iter()
                     .position(|item| item.title == self.current_song)
                 {
-                    self.add_log(format!("当前歌曲在收藏列表索引: {}", current_idx));
                     let next_idx = current_idx + 1;
                     if next_idx < self.favorites.len() {
                         self.selected_favorite = next_idx;
-                        self.add_log(format!("播放下一首，索引: {}", next_idx));
                         return Some(self.favorites[next_idx].title.clone());
                     } else if self.play_mode == PlayMode::ListLoop {
                         // 列表循环：回到第一首
