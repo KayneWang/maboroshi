@@ -2,13 +2,14 @@ use crate::config::Config;
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 #[derive(Clone)]
@@ -21,6 +22,17 @@ pub struct AudioBackend {
     socket_path: String,
     cache: Mutex<HashMap<String, CachedSong>>,
     config: Config,
+    /// Lock ordering: ipc_task → playback_state → mpv_process
+    ipc_task: Mutex<Option<JoinHandle<()>>>,
+    playback_state: Arc<Mutex<PlaybackState>>,
+    mpv_process: Mutex<Option<Child>>,
+}
+
+pub struct PlaybackState {
+    pub progress: f64,
+    pub pause_state: PauseState,
+    /// 当前音量 (0–130)，默认 100
+    pub volume: u8,
 }
 
 #[derive(Clone, Debug)]
@@ -35,33 +47,23 @@ pub enum PauseState {
     Stopped,
 }
 
-#[derive(Debug)]
-pub enum PauseStateError {
-    Io(std::io::Error),
-    Timeout,
-    InvalidResponse,
-}
-
-impl std::fmt::Display for PauseStateError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PauseStateError::Io(e) => write!(f, "io error: {}", e),
-            PauseStateError::Timeout => write!(f, "timeout while querying pause state"),
-            PauseStateError::InvalidResponse => write!(f, "invalid pause state response"),
-        }
-    }
-}
-
-impl std::error::Error for PauseStateError {}
-
 impl AudioBackend {
     const YTDLP_STDERR_LOG_MAX_LINES: usize = 6;
+    /// 在计算分页范围时额外预留的搜索结果数，避免因 yt-dlp 返回少于预期数量而误判为最后一页
+    const SEARCH_RESULT_BUFFER: usize = 50;
 
     pub fn new(config: Config) -> Self {
         Self {
             socket_path: config.paths.socket_path.clone(),
             cache: Mutex::new(HashMap::new()),
             config,
+            ipc_task: Mutex::new(None),
+            playback_state: Arc::new(Mutex::new(PlaybackState {
+                progress: 0.0,
+                pause_state: PauseState::Stopped,
+                volume: 100,
+            })),
+            mpv_process: Mutex::new(None),
         }
     }
 
@@ -70,39 +72,6 @@ impl AudioBackend {
             elapsed.as_secs() < self.config.cache.url_cache_ttl
         } else {
             false
-        }
-    }
-
-    async fn get_cached_url(&self, keyword: &str) -> Option<String> {
-        let cache = self.cache.lock().await;
-        if let Some(cached) = cache.get(keyword) {
-            if self.is_cache_valid(cached.cached_at) {
-                return Some(cached.url.clone());
-            }
-        }
-        None
-    }
-
-    async fn cache_url(&self, keyword: String, url: String) {
-        let mut cache = self.cache.lock().await;
-        cache.insert(
-            keyword,
-            CachedSong {
-                url,
-                cached_at: SystemTime::now(),
-            },
-        );
-
-        // 限制缓存大小
-        if cache.len() > self.config.cache.url_cache_size {
-            // 找到最旧的条目并删除
-            if let Some(oldest_key) = cache
-                .iter()
-                .min_by_key(|(_, v)| v.cached_at)
-                .map(|(k, _)| k.clone())
-            {
-                cache.remove(&oldest_key);
-            }
         }
     }
 
@@ -167,8 +136,8 @@ impl AudioBackend {
         let start_index = (page - 1) * per_page + 1;
         let end_index = page * per_page;
 
-        // 为搜索结果预留 50 个位置
-        let search_count = end_index + 50;
+        // 为搜索结果预留 buffer 位置
+        let search_count = end_index + Self::SEARCH_RESULT_BUFFER;
 
         let mut yt_cmd = self.build_ytdlp_command(&path);
         yt_cmd.args([
@@ -236,7 +205,16 @@ impl AudioBackend {
         let path = Self::get_extended_path();
 
         // 1. 检查缓存
-        let stream_url = if let Some(cached_url) = self.get_cached_url(keyword).await {
+        let stream_url = if let Some(cached_url) = {
+            let cache = self.cache.lock().await;
+            cache.get(keyword).and_then(|c| {
+                if self.is_cache_valid(c.cached_at) {
+                    Some(c.url.clone())
+                } else {
+                    None
+                }
+            })
+        } {
             log_fn("✓ 使用缓存的 URL".to_string());
             cached_url
         } else {
@@ -258,11 +236,9 @@ impl AudioBackend {
                 Ok(Ok(output)) => {
                     log_fn("yt-dlp 执行完成".to_string());
                     Self::log_ytdlp_stderr(&output.stderr, &mut log_fn);
-
                     if !output.status.success() {
                         return Err(anyhow::anyhow!("yt-dlp 获取音频流失败: {}", output.status));
                     }
-
                     output
                 }
                 Ok(Err(e)) => {
@@ -287,16 +263,38 @@ impl AudioBackend {
                 &url.chars().take(50).collect::<String>()
             ));
 
-            // 3. 缓存 URL
-            self.cache_url(keyword.to_string(), url.clone()).await;
+            // 3. 写入缓存（二次检查避免并发填入）
+            {
+                let mut cache = self.cache.lock().await;
+                if cache
+                    .get(keyword)
+                    .map_or(true, |c| !self.is_cache_valid(c.cached_at))
+                {
+                    cache.insert(
+                        keyword.to_string(),
+                        CachedSong {
+                            url: url.clone(),
+                            cached_at: SystemTime::now(),
+                        },
+                    );
+                    if cache.len() > self.config.cache.url_cache_size {
+                        if let Some(oldest_key) = cache
+                            .iter()
+                            .min_by_key(|(_, v)| v.cached_at)
+                            .map(|(k, _)| k.clone())
+                        {
+                            cache.remove(&oldest_key);
+                        }
+                    }
+                }
+            }
             log_fn("✓ 已缓存 URL".to_string());
-
             url
         };
 
         // 4. 启动 mpv
         log_fn("启动 mpv 播放器".to_string());
-        Command::new("mpv")
+        let child = Command::new("mpv")
             .env("PATH", &path)
             .args([
                 "--no-video",
@@ -306,7 +304,13 @@ impl AudioBackend {
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
+            .kill_on_drop(true)
             .spawn()?;
+
+        {
+            let mut process_lock = self.mpv_process.lock().await;
+            *process_lock = Some(child);
+        }
 
         log_fn("mpv 已启动，等待 socket 就绪...".to_string());
 
@@ -314,52 +318,106 @@ impl AudioBackend {
         let socket_path = self.socket_path.clone();
         let wait_timeout_secs = self.config.network.play_timeout.max(1);
         let max_attempts = (wait_timeout_secs * 10) as usize;
+        let mut socket_ready = false;
         for i in 0..max_attempts {
             if Path::new(&socket_path).exists() {
                 log_fn(format!("socket 就绪 ({}ms)", i * 100));
+                socket_ready = true;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        if !Path::new(&socket_path).exists() {
+        if !socket_ready {
             log_fn("警告: socket 文件未创建，但继续播放".to_string());
+        } else {
+            // 遵守锁定顺序 (ipc_task → playback_state → mpv_process)
+            // 1. 先锁 ipc_task，杀死旧任务
+            let mut ipc_task_lock = self.ipc_task.lock().await;
+            if let Some(task) = ipc_task_lock.take() {
+                task.abort();
+            }
+
+            // 2. 再锁 playback_state，初始化状态
+            {
+                let mut state = self.playback_state.lock().await;
+                state.progress = 0.0;
+                state.pause_state = PauseState::Playing;
+            }
+
+            // 3. 启动 IPC 监听任务，clone Arc 传入 spawn
+            let state_clone = Arc::clone(&self.playback_state);
+            let socket_path_clone = self.socket_path.clone();
+
+            let handle = tokio::spawn(async move {
+                if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket_path_clone).await {
+                    let (reader, mut writer) = stream.split();
+                    let mut buf_reader = BufReader::new(reader);
+
+                    // 发送属性观察请求
+                    let observe_percent =
+                        serde_json::json!({ "command": ["observe_property", 1, "percent-pos"] });
+                    let observe_pause =
+                        serde_json::json!({ "command": ["observe_property", 2, "pause"] });
+                    let observe_volume =
+                        serde_json::json!({ "command": ["observe_property", 3, "volume"] });
+
+                    let _ = writer
+                        .write_all(format!("{}\n", observe_percent).as_bytes())
+                        .await;
+                    let _ = writer
+                        .write_all(format!("{}\n", observe_pause).as_bytes())
+                        .await;
+                    let _ = writer
+                        .write_all(format!("{}\n", observe_volume).as_bytes())
+                        .await;
+
+                    let mut line = String::new();
+                    while let Ok(n) = buf_reader.read_line(&mut line).await {
+                        if n == 0 {
+                            break; // Socket 关闭
+                        }
+
+                        if let Ok(json) = serde_json::from_str::<Value>(&line) {
+                            if json["event"] == "property-change" {
+                                let mut state = state_clone.lock().await;
+                                if json["name"] == "percent-pos" {
+                                    if let Some(val) = json["data"].as_f64() {
+                                        state.progress = val / 100.0;
+                                    }
+                                } else if json["name"] == "pause" {
+                                    if let Some(val) = json["data"].as_bool() {
+                                        state.pause_state = if val {
+                                            PauseState::Paused
+                                        } else {
+                                            PauseState::Playing
+                                        };
+                                    }
+                                } else if json["name"] == "volume" {
+                                    if let Some(val) = json["data"].as_f64() {
+                                        state.volume = val.clamp(0.0, 130.0) as u8;
+                                    }
+                                }
+                            }
+                        }
+                        line.clear();
+                    }
+                }
+
+                // 监听退出或报错后，将状态重置为 Stopped
+                let mut state = state_clone.lock().await;
+                state.pause_state = PauseState::Stopped;
+            });
+
+            *ipc_task_lock = Some(handle);
         }
 
         Ok(())
     }
 
-    pub async fn get_progress(&self) -> Result<f64> {
-        let io_timeout = Duration::from_millis(100);
-        let cmd = serde_json::json!({ "command": ["get_property", "percent-pos"] });
-        let mut stream = timeout(
-            io_timeout,
-            tokio::net::UnixStream::connect(&self.socket_path),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("连接 mpv socket 超时"))?
-        .with_context(|| format!("无法连接 mpv socket: {}", self.socket_path))?;
-        timeout(
-            io_timeout,
-            stream.write_all(format!("{}\n", cmd).as_bytes()),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("发送进度查询命令超时"))?
-        .context("发送进度查询命令失败")?;
-
-        let mut buf = [0; 1024];
-        let n = timeout(io_timeout, stream.read(&mut buf))
-            .await
-            .map_err(|_| anyhow::anyhow!("读取进度响应超时"))?
-            .context("读取进度响应失败")?;
-        let resp: Value = serde_json::from_slice(&buf[..n]).context("解析进度响应失败")?;
-
-        // mpv 返回格式: {"data": 12.34, "request_id": 0, "error": "success"}
-        if let Some(percent) = resp["data"].as_f64() {
-            Ok(percent / 100.0)
-        } else {
-            Ok(0.0)
-        }
+    pub async fn get_progress(&self) -> f64 {
+        let state = self.playback_state.lock().await;
+        state.progress
     }
 
     pub async fn send_command(&self, args: Vec<&str>) -> Result<()> {
@@ -375,66 +433,65 @@ impl AudioBackend {
     }
 
     /// 获取 mpv 播放状态。
-    /// - Ok(PauseState::Paused): mpv 正在暂停
-    /// - Ok(PauseState::Playing): mpv 正在播放
-    /// - Ok(PauseState::Stopped): 播放器已停止（socket 不存在或连接已断开）
-    /// - Err(...): 临时错误（超时/无效响应等）
-    pub async fn get_pause_state(&self) -> std::result::Result<PauseState, PauseStateError> {
-        if !Path::new(&self.socket_path).exists() {
-            return Ok(PauseState::Stopped);
-        }
+    /// - PauseState::Paused: mpv 正在暂停
+    /// - PauseState::Playing: mpv 正在播放
+    /// - PauseState::Stopped: 播放器已停止（socket 不存在或连接已断开）
+    pub async fn get_pause_state(&self) -> PauseState {
+        let state = self.playback_state.lock().await;
+        state.pause_state
+    }
 
-        let cmd = serde_json::json!({ "command": ["get_property", "pause"] });
-        let mut stream = match tokio::net::UnixStream::connect(&self.socket_path).await {
-            Ok(s) => s,
-            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
-                return Ok(PauseState::Stopped);
-            }
-            Err(e) => return Err(PauseStateError::Io(e)),
-        };
+    pub async fn get_volume(&self) -> u8 {
+        self.playback_state.lock().await.volume
+    }
 
-        stream
-            .write_all(format!("{}\n", cmd).as_bytes())
-            .await
-            .map_err(PauseStateError::Io)?;
-
-        let mut buf = [0; 1024];
-        let n = match tokio::time::timeout(Duration::from_millis(100), stream.read(&mut buf)).await
-        {
-            Ok(Ok(n)) => n,
-            Ok(Err(e)) => return Err(PauseStateError::Io(e)),
-            Err(_) => return Err(PauseStateError::Timeout),
-        };
-
-        if n == 0 {
-            return Ok(PauseState::Stopped);
-        }
-
-        let resp: Value =
-            serde_json::from_slice(&buf[..n]).map_err(|_| PauseStateError::InvalidResponse)?;
-
-        if let Some(paused) = resp["data"].as_bool() {
-            if paused {
-                Ok(PauseState::Paused)
-            } else {
-                Ok(PauseState::Playing)
-            }
-        } else if resp["error"].as_str() == Some("property unavailable") {
-            Ok(PauseState::Stopped)
-        } else {
-            Err(PauseStateError::InvalidResponse)
-        }
+    /// 调整音量。delta 为正数增大，负数减小；范围 0–130。
+    pub async fn change_volume(&self, delta: i32) -> Result<()> {
+        let delta_str = delta.to_string();
+        self.send_command(vec!["add", "volume", &delta_str]).await
     }
 
     pub async fn seek(&self, seconds: i32) -> Result<()> {
-        self.send_command(vec!["seek", &seconds.to_string(), "relative"])
+        let seconds_str = seconds.to_string();
+        self.send_command(vec!["seek", &seconds_str, "relative"])
             .await
     }
 
     pub async fn quit(&self) {
-        // 优先通过 IPC socket 优雅退出 mpv
+        // 遵守锁定顺序 (ipc_task → playback_state → mpv_process)
+        // 1. 先关闭 IPC 监听任务
+        {
+            let mut ipc_task_lock = self.ipc_task.lock().await;
+            if let Some(task) = ipc_task_lock.take() {
+                task.abort();
+            }
+        }
+
+        // 2. 重置播放状态
+        {
+            let mut state = self.playback_state.lock().await;
+            state.pause_state = PauseState::Stopped;
+            state.progress = 0.0;
+        }
+
+        // 3. 优先通过 IPC socket 优雅退出 mpv（不持有任何 Mutex）
         let _ = self.send_command(vec!["quit"]).await;
         // 清理 socket 文件
+        let _ = std::fs::remove_file(&self.socket_path);
+
+        // 4. 如果进程还在，通过进程句柄杀掉并等待结束
+        let mut process_lock = self.mpv_process.lock().await;
+        if let Some(mut child) = process_lock.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+        }
+    }
+}
+
+impl Drop for AudioBackend {
+    fn drop(&mut self) {
+        // 防止程序异常退出时 socket 文件残留，导致下次启动或其他实例出现冲突
+        // 正常退出时 quit() 已经清理了 socket，这里是最后兜底
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }

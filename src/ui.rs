@@ -90,11 +90,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     let source_badge = app.current_source.to_uppercase();
 
     let title_text = format!(
-        " 🌀 Maboroshi - 幻 | {} [{}] [P{}/{}]{} ",
+        " 🌀 Maboroshi - 幻 | {} [{}] [P{}/{}] [VOL:{}%]{} ",
         app.get_play_mode_text(),
         source_badge,
         app.current_page,
         total_pages_text,
+        app.volume,
         loading_badge
     );
     let title = Paragraph::new(title_text).block(
@@ -284,11 +285,20 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     frame.render_widget(logs, body_chunks[1]);
 
     let help_text = if app.input_mode {
-        format!(" 输入: {} | Enter 搜索 | Esc 取消 ", app.input_buffer)
+        let history_hint = if app.search_history.is_empty() {
+            String::new()
+        } else {
+            format!(" | ↑↓ 历史({} 条)", app.search_history.len())
+        };
+        format!(
+            " 输入: {} | Enter 搜索 | Esc 取消{} ",
+            app.input_buffer, history_hint
+        )
     } else if matches!(app.status, PlayerStatus::SearchResults) {
         " ↑↓ 选择 | ←→ 翻页 | Enter 播放 | f 收藏 | Esc 返回 | q 退出 ".to_string()
     } else if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
-        " Space 暂停/继续 | ←→ 快退/快进 | f 收藏 | m 模式 | s 搜索 | q 退出 ".to_string()
+        " Space 暂停/继续 | ←→ 快退/快进 | +/- 音量 | f 收藏 | m 模式 | s 搜索 | q 退出 "
+            .to_string()
     } else {
         " s 搜索 | ↑↓ 选择收藏 | Enter 播放 | f 收藏 | m 模式 | q 退出 ".to_string()
     };

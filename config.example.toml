@@ -46,6 +46,9 @@ default_mode = "shuffle"
 # 快进/快退秒数（使用左右方向键时跳转的秒数）
 seek_seconds = 10
 
+# 每次按 +/- 调整的音量步长（范围 0–130，默认 5）
+volume_step = 5
+
 [paths]
 # mpv IPC Socket 路径
 socket_path = "/tmp/maboroshi.sock"

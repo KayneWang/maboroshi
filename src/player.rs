@@ -2,10 +2,21 @@ use crate::app::{App, PlayerStatus};
 use crate::audio::{AudioBackend, PauseState};
 use crate::config::Config;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 
 const LOG_CHANNEL_CAPACITY: usize = 256;
+
+fn spawn_log_forwarder(app: Arc<Mutex<App>>) -> Sender<String> {
+    let (tx, mut rx) = mpsc::channel::<String>(LOG_CHANNEL_CAPACITY);
+    tokio::spawn(async move {
+        while let Some(log) = rx.recv().await {
+            app.lock().await.add_log(log);
+        }
+    });
+    tx
+}
 
 pub struct Player {
     audio: Arc<AudioBackend>,
@@ -53,14 +64,7 @@ impl Player {
         let keyword_clone = keyword.clone();
 
         let task = tokio::spawn(async move {
-            let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(LOG_CHANNEL_CAPACITY);
-
-            let app_log = app_c.clone();
-            tokio::spawn(async move {
-                while let Some(log) = log_rx.recv().await {
-                    app_log.lock().await.add_log(log);
-                }
-            });
+            let log_tx = spawn_log_forwarder(app_c.clone());
 
             let result = audio_c
                 .search(&keyword, 1, |log| {
@@ -113,14 +117,7 @@ impl Player {
             let app_c = Arc::clone(&self.app);
 
             let task = tokio::spawn(async move {
-                let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(LOG_CHANNEL_CAPACITY);
-
-                let app_log = app_c.clone();
-                tokio::spawn(async move {
-                    while let Some(log) = log_rx.recv().await {
-                        app_log.lock().await.add_log(log);
-                    }
-                });
+                let log_tx = spawn_log_forwarder(app_c.clone());
 
                 {
                     let mut a = app_c.lock().await;
@@ -177,14 +174,7 @@ impl Player {
         let app_c = Arc::clone(&self.app);
 
         let task = tokio::spawn(async move {
-            let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(LOG_CHANNEL_CAPACITY);
-
-            let app_log = app_c.clone();
-            tokio::spawn(async move {
-                while let Some(log) = log_rx.recv().await {
-                    app_log.lock().await.add_log(log);
-                }
-            });
+            let log_tx = spawn_log_forwarder(app_c.clone());
 
             let result = audio_c
                 .search_and_play(&song, |log| {
@@ -282,27 +272,22 @@ impl Player {
         let next_song = {
             let mut app_lock = self.app.lock().await;
 
-            match progress_result {
-                Ok(p) => {
-                    app_lock.progress = p;
-                }
-                Err(_) => {}
-            }
+            app_lock.progress = progress_result;
 
             match pause_state_result {
-                Ok(PauseState::Paused) => {
+                PauseState::Paused => {
                     if !matches!(app_lock.status, PlayerStatus::Paused) {
                         app_lock.status = PlayerStatus::Paused;
                     }
                     None
                 }
-                Ok(PauseState::Playing) => {
+                PauseState::Playing => {
                     if matches!(app_lock.status, PlayerStatus::Paused) {
                         app_lock.status = PlayerStatus::Playing;
                     }
                     None
                 }
-                Ok(PauseState::Stopped) => {
+                PauseState::Stopped => {
                     if let Some(next_song) = app_lock.get_next_song() {
                         app_lock.add_log(format!("自动播放下一首: {}", next_song));
                         Some(next_song)
@@ -312,7 +297,6 @@ impl Player {
                         None
                     }
                 }
-                Err(_) => None,
             }
         };
 
@@ -344,6 +328,34 @@ impl Player {
 
         let mut app_lock = self.app.lock().await;
         app_lock.add_log(log_message);
+    }
+
+    pub async fn volume_up(&self) {
+        self.change_volume_with_log(self.config.playback.volume_step)
+            .await;
+    }
+
+    pub async fn volume_down(&self) {
+        self.change_volume_with_log(-self.config.playback.volume_step)
+            .await;
+    }
+
+    async fn change_volume_with_log(&self, delta: i32) {
+        match self.audio.change_volume(delta).await {
+            Ok(_) => {
+                // 读取 mpv 实际更新后的音量（稍等一个事件循环让 IPC 刷新）
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                let vol = self.audio.get_volume().await;
+                let mut app_lock = self.app.lock().await;
+                app_lock.volume = vol;
+                let direction = if delta > 0 { "🔊" } else { "🔈" };
+                app_lock.add_log(format!("{} 音量: {}%", direction, vol));
+            }
+            Err(e) => {
+                let mut app_lock = self.app.lock().await;
+                app_lock.add_log(format!("音量调节失败: {}", e));
+            }
+        }
     }
 
     pub async fn next_page(&self) {
@@ -402,14 +414,7 @@ impl Player {
         let keyword_clone = keyword.to_string();
 
         let task = tokio::spawn(async move {
-            let (log_tx, mut log_rx) = tokio::sync::mpsc::channel(LOG_CHANNEL_CAPACITY);
-
-            let app_log = app_c.clone();
-            tokio::spawn(async move {
-                while let Some(log) = log_rx.recv().await {
-                    app_log.lock().await.add_log(log);
-                }
-            });
+            let log_tx = spawn_log_forwarder(app_c.clone());
 
             let result = audio_c
                 .search(&keyword_clone, page, |log| {

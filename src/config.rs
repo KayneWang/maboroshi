@@ -48,6 +48,8 @@ pub struct PlaybackConfig {
     pub default_mode: String,
     #[serde(default = "default_seek_seconds")]
     pub seek_seconds: i32,
+    #[serde(default = "default_volume_step")]
+    pub volume_step: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +97,10 @@ fn default_seek_seconds() -> i32 {
     10
 }
 
+fn default_volume_step() -> i32 {
+    5
+}
+
 fn default_socket_path() -> String {
     "/tmp/maboroshi.sock".to_string()
 }
@@ -136,6 +142,7 @@ impl Default for PlaybackConfig {
         Self {
             default_mode: default_play_mode(),
             seek_seconds: default_seek_seconds(),
+            volume_step: default_volume_step(),
         }
     }
 }

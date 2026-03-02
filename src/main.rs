@@ -111,13 +111,19 @@ async fn main() -> Result<()> {
     let config = Config::load();
     let _ = Config::save_example();
 
+    // 动态生成 socket 路径（基于 PID），避免多实例冲突
+    let mut config = config;
+    if config.paths.socket_path == "/tmp/maboroshi.sock" {
+        config.paths.socket_path = format!("/tmp/maboroshi-{}.sock", std::process::id());
+    }
+
     let app = Arc::new(Mutex::new(App::new(&config.paths.favorites_file)));
 
     {
         let mut app_lock = app.lock().await;
         app_lock.current_source = config.search.source.clone();
         let play_mode_ok = app_lock.set_play_mode_from_config(&config.playback.default_mode);
-        app_lock.add_log(format!("配置加载完成"));
+        app_lock.add_log("配置加载完成".to_string());
         app_lock.add_log(format!(
             "数据源: {} ({})",
             config.search.source,
@@ -150,6 +156,8 @@ async fn main() -> Result<()> {
         TogglePause,
         SeekForward,
         SeekBackward,
+        VolumeUp,
+        VolumeDown,
         NextPage,
         PrevPage,
         Quit,
@@ -174,21 +182,34 @@ async fn main() -> Result<()> {
                         KeyCode::Enter => {
                             if !app_lock.input_buffer.is_empty() {
                                 let keyword = app_lock.input_buffer.clone();
+                                app_lock.add_to_search_history(&keyword);
+                                app_lock.history_reset();
                                 app_lock.input_mode = false;
                                 app_lock.input_buffer.clear();
                                 pending_action = Some(PendingAction::Search(keyword));
                             }
                         }
                         KeyCode::Esc => {
+                            app_lock.history_reset();
                             app_lock.input_mode = false;
                             app_lock.input_buffer.clear();
                             app_lock.add_log("取消搜索".to_string());
                         }
+                        KeyCode::Up => {
+                            app_lock.history_prev();
+                        }
+                        KeyCode::Down => {
+                            app_lock.history_next();
+                        }
                         KeyCode::Backspace => {
                             app_lock.input_buffer.pop();
+                            // 输入时退出历史导航模式
+                            app_lock.history_reset();
                         }
                         KeyCode::Char(c) => {
                             app_lock.input_buffer.push(c);
+                            // 输入时退出历史导航模式
+                            app_lock.history_reset();
                         }
                         _ => {}
                     }
@@ -234,7 +255,16 @@ async fn main() -> Result<()> {
                             app_lock.add_log("进入搜索模式".to_string());
                         }
                         KeyCode::Char('f') => {
-                            app_lock.toggle_favorite();
+                            if matches!(
+                                app_lock.status,
+                                PlayerStatus::Playing | PlayerStatus::Paused
+                            ) {
+                                // 播放中：切换当前播放歌曲的收藏状态
+                                app_lock.toggle_favorite();
+                            } else {
+                                // 收藏列表浏览中：直接移除选中的条目
+                                app_lock.remove_selected_favorite();
+                            }
                         }
                         KeyCode::Char('m') => {
                             app_lock.toggle_play_mode();
@@ -273,6 +303,12 @@ async fn main() -> Result<()> {
                                 pending_action = Some(PendingAction::SeekBackward);
                             }
                         }
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            pending_action = Some(PendingAction::VolumeUp);
+                        }
+                        KeyCode::Char('-') => {
+                            pending_action = Some(PendingAction::VolumeDown);
+                        }
                         _ => {}
                     }
                 }
@@ -302,6 +338,14 @@ async fn main() -> Result<()> {
             }
             Some(PendingAction::SeekBackward) => {
                 player.seek_backward().await;
+                continue;
+            }
+            Some(PendingAction::VolumeUp) => {
+                player.volume_up().await;
+                continue;
+            }
+            Some(PendingAction::VolumeDown) => {
+                player.volume_down().await;
                 continue;
             }
             Some(PendingAction::NextPage) => {

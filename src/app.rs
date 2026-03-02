@@ -2,7 +2,7 @@ use crate::audio::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[derive(Clone)]
@@ -39,9 +39,16 @@ pub struct App {
     pub status: PlayerStatus,
     pub current_song: String,
     pub progress: f64,
+    pub volume: u8,
     pub logs: VecDeque<String>,
     pub input_mode: bool,
     pub input_buffer: String,
+    /// 搜索历史，最新的在前（index 0 = 最近一条）
+    pub search_history: VecDeque<String>,
+    /// None = 在草稿位置；Some(i) = 当前浏览到的历史条目
+    history_cursor: Option<usize>,
+    /// 开始历史导航时保存的未提交输入
+    input_draft: String,
     pub favorites: Vec<FavoriteItem>,
     pub selected_favorite: usize,
     pub play_mode: PlayMode,
@@ -69,7 +76,7 @@ impl App {
         }
     }
 
-    fn backup_corrupted_favorites(path: &PathBuf) -> Result<PathBuf, String> {
+    fn backup_corrupted_favorites(path: &Path) -> Result<PathBuf, String> {
         let ts = SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -78,7 +85,7 @@ impl App {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("favorites.json");
-        let mut backup_path = path.clone();
+        let mut backup_path = path.to_path_buf();
         backup_path.set_file_name(format!("{}.corrupt.{}", file_name, ts));
         fs::rename(path, &backup_path).map_err(|e| {
             format!(
@@ -91,7 +98,7 @@ impl App {
         Ok(backup_path)
     }
 
-    fn load_favorites(path: &PathBuf) -> (Vec<FavoriteItem>, Option<String>) {
+    fn load_favorites(path: &Path) -> (Vec<FavoriteItem>, Option<String>) {
         let content = match fs::read_to_string(path) {
             Ok(content) => content,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Vec::new(), None),
@@ -122,7 +129,7 @@ impl App {
         }
     }
 
-    fn save_favorites(favorites: &[FavoriteItem], path: &PathBuf) -> Result<(), String> {
+    fn save_favorites(favorites: &[FavoriteItem], path: &Path) -> Result<(), String> {
         let data = FavoritesData {
             items: favorites.to_vec(),
         };
@@ -147,9 +154,13 @@ impl App {
             status: PlayerStatus::Waiting,
             current_song: String::new(),
             progress: 0.0,
+            volume: 100,
             logs,
             input_mode: false,
             input_buffer: String::new(),
+            search_history: VecDeque::new(),
+            history_cursor: None,
+            input_draft: String::new(),
             favorites,
             selected_favorite: 0,
             play_mode: PlayMode::Shuffle,
@@ -179,6 +190,63 @@ impl App {
         }
     }
 
+    /// 搜索成功后将关键词写入历史。
+    /// 相同内容先删除再插入头部（去重 + 移至最新），最多保留 50 条。
+    pub fn add_to_search_history(&mut self, keyword: &str) {
+        let keyword = keyword.trim().to_string();
+        if keyword.is_empty() {
+            return;
+        }
+        // 去重
+        self.search_history.retain(|k| k != &keyword);
+        // 插入头部（最新的在前）
+        self.search_history.push_front(keyword);
+        if self.search_history.len() > 50 {
+            self.search_history.pop_back();
+        }
+    }
+
+    /// 在输入模式中按 ↑：向更早的历史条目导航。
+    /// 首次按下时保存当前输入为草稿。
+    pub fn history_prev(&mut self) {
+        if self.search_history.is_empty() {
+            return;
+        }
+        let next_cursor = match self.history_cursor {
+            None => {
+                // 首次按下，保存草稿
+                self.input_draft = self.input_buffer.clone();
+                0
+            }
+            Some(i) => (i + 1).min(self.search_history.len() - 1),
+        };
+        self.history_cursor = Some(next_cursor);
+        self.input_buffer = self.search_history[next_cursor].clone();
+    }
+
+    /// 在输入模式中按 ↓：向更新的历史条目导航，到底恢复草稿。
+    pub fn history_next(&mut self) {
+        match self.history_cursor {
+            None => {} // 已在草稿位置，无操作
+            Some(0) => {
+                // 回到草稿
+                self.history_cursor = None;
+                self.input_buffer = self.input_draft.clone();
+            }
+            Some(i) => {
+                let prev = i - 1;
+                self.history_cursor = Some(prev);
+                self.input_buffer = self.search_history[prev].clone();
+            }
+        }
+    }
+
+    /// 历史导航状态重置（Enter 或 Esc 时调用）。
+    pub fn history_reset(&mut self) {
+        self.history_cursor = None;
+        self.input_draft.clear();
+    }
+
     pub fn toggle_favorite(&mut self) {
         if self.current_song.is_empty() {
             return;
@@ -205,6 +273,24 @@ impl App {
         }
 
         // 自动保存收藏列表
+        if let Err(e) = Self::save_favorites(&self.favorites, &self.favorites_path) {
+            self.add_log(e);
+        }
+    }
+
+    /// 在收藏列表界面，直接移除当前高亮选中的收藏条目（不依赖 current_song）。
+    pub fn remove_selected_favorite(&mut self) {
+        if self.favorites.is_empty() {
+            return;
+        }
+        let idx = self.selected_favorite.min(self.favorites.len() - 1);
+        let title = self.favorites[idx].title.clone();
+        self.favorites.remove(idx);
+        // 选中行在删除后保持合法范围
+        if self.selected_favorite >= self.favorites.len() && !self.favorites.is_empty() {
+            self.selected_favorite = self.favorites.len() - 1;
+        }
+        self.add_log(format!("取消收藏: {}", title));
         if let Err(e) = Self::save_favorites(&self.favorites, &self.favorites_path) {
             self.add_log(e);
         }
@@ -400,12 +486,46 @@ impl App {
         }
     }
 
+    /// 返回 [0, max) 区间内均匀分布的伪随机数。
+    /// 使用 xorshift64 算法，每个线程工作，通过拒绝采样消除取模偏差。
     fn simple_random(&self, max: usize) -> usize {
-        let nanos = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos() as usize;
-        nanos % max
+        use std::cell::Cell;
+        use std::time::UNIX_EPOCH;
+
+        thread_local! {
+            static RNG_STATE: Cell<u64> = Cell::new(0);
+        }
+
+        RNG_STATE.with(|state| {
+            let mut s = state.get();
+            if s == 0 {
+                // 首次使用用系统时间作为种子，确保非零
+                s = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() as u64
+                    | 1; // 确保非零
+            }
+
+            // xorshift64
+            let next_state = |x: u64| -> u64 {
+                let mut x = x;
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                x
+            };
+
+            // 拒绝采样消除取模偏差
+            let threshold = u64::MAX - (u64::MAX % max as u64);
+            loop {
+                s = next_state(s);
+                if s < threshold {
+                    state.set(s);
+                    return (s % max as u64) as usize;
+                }
+            }
+        })
     }
 
     pub fn get_next_song(&mut self) -> Option<String> {
