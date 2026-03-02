@@ -1,0 +1,23 @@
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+  categories:
+    - title: ✨ 新功能
+      labels:
+        - enhancement
+        - feature
+    - title: 🐛 Bug 修复
+      labels:
+        - bug
+        - fix
+    - title: ⚡ 性能优化
+      labels:
+        - performance
+        - refactor
+    - title: 📖 文档
+      labels:
+        - documentation
+    - title: 🔧 其他改动
+      labels:
+        - "*"

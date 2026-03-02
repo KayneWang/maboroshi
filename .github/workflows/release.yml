@@ -81,6 +81,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -95,7 +98,35 @@ jobs:
           find artifacts -type f -exec cp {} release-files/ \;
           ls -lh release-files/
 
-      - name: Create Release
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          TAG="${GITHUB_REF_NAME}"           # e.g. v0.1.9
+          VERSION="${TAG#v}"                  # e.g. 0.1.9
+
+          # Extract the block between this version's heading and the next one
+          NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+
+          if [ -z "$NOTES" ]; then
+            echo "No CHANGELOG entry found for ${VERSION}, will use auto-generated notes."
+            echo "found=false" >> $GITHUB_OUTPUT
+          else
+            # Write to a temp file to safely handle multi-line content
+            echo "$NOTES" > /tmp/release_notes.md
+            echo "found=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release (with CHANGELOG body)
+        if: steps.changelog.outputs.found == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-files/*
+          draft: false
+          prerelease: false
+          body_path: /tmp/release_notes.md
+
+      - name: Create Release (auto-generated notes fallback)
+        if: steps.changelog.outputs.found == 'false'
         uses: softprops/action-gh-release@v1
         with:
           files: release-files/*
