@@ -1,4 +1,4 @@
-use crate::audio::SearchResult;
+use crate::net::SearchResult;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -493,7 +493,7 @@ impl App {
         use std::time::UNIX_EPOCH;
 
         thread_local! {
-            static RNG_STATE: Cell<u64> = Cell::new(0);
+            static RNG_STATE: Cell<u64> = const { Cell::new(0) };
         }
 
         RNG_STATE.with(|state| {

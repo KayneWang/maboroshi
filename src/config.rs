@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub search: SearchConfig,
@@ -156,39 +156,36 @@ impl Default for PathsConfig {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            search: SearchConfig::default(),
-            cache: CacheConfig::default(),
-            network: NetworkConfig::default(),
-            playback: PlaybackConfig::default(),
-            paths: PathsConfig::default(),
-        }
-    }
-}
-
 impl Config {
     fn get_config_path() -> PathBuf {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
         PathBuf::from(home).join(".config/maboroshi/config.toml")
     }
 
+    #[allow(dead_code)]
     pub fn load() -> Self {
+        Self::load_with_warning().0
+    }
+
+    /// 加载配置并返回可能的警告信息。
+    /// 配置文件解析失败时返回 (默认配置, Some(警告字符串))，成功时 warning 为 None。
+    pub fn load_with_warning() -> (Self, Option<String>) {
         let config_path = Self::get_config_path();
 
         if let Ok(content) = fs::read_to_string(&config_path) {
             match toml::from_str::<Config>(&content) {
-                Ok(config) => {
-                    return config;
-                }
+                Ok(config) => return (config, None),
                 Err(e) => {
-                    eprintln!("配置文件解析失败: {}, 使用默认配置", e);
+                    let warn = format!(
+                        "配置文件 {:?} 解析失败（{}），已使用默认配置",
+                        config_path, e
+                    );
+                    return (Config::default(), Some(warn));
                 }
             }
         }
 
-        Config::default()
+        (Config::default(), None)
     }
 
     pub fn save_example() -> Result<(), Box<dyn std::error::Error>> {

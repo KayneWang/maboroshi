@@ -1,82 +1,17 @@
-use crate::app::App;
-use crate::app::PlayerStatus;
+use crate::app::{App, PlayerStatus};
+use crate::ui::theme::{
+    make_list_state, selected_style, spinner_frame, style_for_log_line, truncate_text,
+    COLOR_NEON_CYAN, COLOR_NEON_GREEN, COLOR_NEON_PINK, COLOR_WARNING,
+};
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
     Frame,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
 
-const COLOR_NEON_CYAN: Color = Color::Rgb(0, 230, 255);
-const COLOR_NEON_PINK: Color = Color::Rgb(255, 80, 200);
-const COLOR_NEON_GREEN: Color = Color::Rgb(120, 255, 120);
-const COLOR_BG_HIGHLIGHT: Color = Color::Rgb(35, 35, 55);
-const COLOR_WARNING: Color = Color::Rgb(255, 190, 90);
-
-fn spinner_frame() -> &'static str {
-    const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-    let tick = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        / 120;
-    FRAMES[(tick as usize) % FRAMES.len()]
-}
-
-fn truncate_text(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    if max_chars <= 1 {
-        return "…".to_string();
-    }
-    let head: String = text.chars().take(max_chars - 1).collect();
-    format!("{}…", head)
-}
-
-fn style_for_log_line(line: &str) -> Style {
-    if line.contains("失败") || line.contains("错误") || line.contains('❌') {
-        Style::default().fg(Color::Red)
-    } else if line.contains("警告") || line.contains("超时") {
-        Style::default().fg(COLOR_WARNING)
-    } else if line.contains('✓') || line.contains("成功") || line.contains("就绪") {
-        Style::default().fg(COLOR_NEON_GREEN)
-    } else {
-        Style::default().fg(Color::Gray)
-    }
-}
-
-pub fn render(app: &mut App, frame: &mut Frame) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // 标题
-            Constraint::Length(4), // 播放状态 + 进度条
-            Constraint::Min(8),    // 主体区域（列表 + 日志）
-            Constraint::Length(3), // 帮助栏
-        ])
-        .split(frame.size());
-
-    let body_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(70), // 列表区域
-            Constraint::Percentage(30), // 日志区域
-        ])
-        .split(chunks[2]);
-
-    let status_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // 状态文本
-            Constraint::Min(1),    // 进度条
-        ])
-        .split(chunks[1]);
-
-    let list_text_max = body_chunks[0].width.saturating_sub(8) as usize;
-
+pub fn render_title(app: &App, frame: &mut Frame, area: Rect) {
     let total_pages_text = if app.total_pages == usize::MAX {
         "?".to_string()
     } else {
@@ -104,7 +39,17 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .border_style(Style::default().fg(COLOR_NEON_CYAN))
             .style(Style::default().fg(COLOR_NEON_CYAN)),
     );
-    frame.render_widget(title, chunks[0]);
+    frame.render_widget(title, area);
+}
+
+pub fn render_status_and_gauge(app: &App, frame: &mut Frame, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // 状态文本
+            Constraint::Min(1),    // 进度条
+        ])
+        .split(area);
 
     let status_text = match &app.status {
         PlayerStatus::Waiting => {
@@ -132,7 +77,12 @@ pub fn render(app: &mut App, frame: &mut Frame) {
 
     let favorite_indicator = if app.is_favorite() { " ⭐" } else { "" };
     let progress_label = if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
-        format!("{:.0}%", app.progress * 100.0)
+        let pct = if app.progress.is_finite() {
+            app.progress
+        } else {
+            0.0
+        };
+        format!("{:.0}%", pct * 100.0)
     } else {
         String::new()
     };
@@ -143,15 +93,18 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(gauge_color)),
     );
-    frame.render_widget(status_line, status_chunks[0]);
+    frame.render_widget(status_line, chunks[0]);
 
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(gauge_color))
         .percent((app.progress * 100.0).clamp(0.0, 100.0) as u16)
         .label(progress_label);
-    frame.render_widget(gauge, status_chunks[1]);
+    frame.render_widget(gauge, chunks[1]);
+}
 
-    // 列表区域：搜索结果或收藏列表
+pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
+    let list_text_max = area.width.saturating_sub(8) as usize;
+
     if matches!(app.status, PlayerStatus::SearchResults) && !app.search_results.is_empty() {
         let search_items: Vec<ListItem> = app
             .search_results
@@ -160,14 +113,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .map(|(i, result)| {
                 let is_selected = i == app.selected_search_result;
                 let style = if is_selected {
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(COLOR_BG_HIGHLIGHT)
-                        .add_modifier(Modifier::BOLD)
+                    selected_style()
                 } else {
                     Style::default()
                 };
-
                 let base = format!("{}. {}", i + 1, result.title);
                 let marker = if is_selected { "›" } else { " " };
                 ListItem::new(format!(
@@ -190,16 +139,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                     .border_style(Style::default().fg(COLOR_NEON_CYAN))
                     .borders(Borders::ALL),
             )
-            .highlight_style(
-                Style::default()
-                    .fg(Color::White)
-                    .bg(COLOR_BG_HIGHLIGHT)
-                    .add_modifier(Modifier::BOLD),
-            );
+            .highlight_style(selected_style());
 
-        let mut list_state = ListState::default();
-        list_state.select(Some(app.selected_search_result));
-        frame.render_stateful_widget(search_list, body_chunks[0], &mut list_state);
+        let mut list_state = make_list_state(app.selected_search_result);
+        frame.render_stateful_widget(search_list, area, &mut list_state);
     } else {
         // 显示收藏列表
         let favorite_items: Vec<ListItem> = app
@@ -212,10 +155,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 let is_selected = i == app.selected_favorite;
 
                 let style = if is_selected {
-                    Style::default()
-                        .fg(Color::White)
-                        .bg(COLOR_BG_HIGHLIGHT)
-                        .add_modifier(Modifier::BOLD)
+                    selected_style()
                 } else if is_playing {
                     Style::default()
                         .fg(COLOR_NEON_GREEN)
@@ -256,18 +196,14 @@ pub fn render(app: &mut App, frame: &mut Frame) {
                 .borders(Borders::ALL),
         );
 
-        let mut list_state = ListState::default();
-        list_state.select(Some(app.selected_favorite));
-        frame.render_stateful_widget(favorites_list, body_chunks[0], &mut list_state);
+        let mut list_state = make_list_state(app.selected_favorite);
+        frame.render_stateful_widget(favorites_list, area, &mut list_state);
     }
+}
 
-    // 日志区域
-    let log_height = body_chunks[1].height.saturating_sub(2) as usize;
-    let log_start = if app.logs.len() > log_height {
-        app.logs.len() - log_height
-    } else {
-        0
-    };
+pub fn render_logs(app: &App, frame: &mut Frame, area: Rect) {
+    let log_height = area.height.saturating_sub(2) as usize;
+    let log_start = app.logs.len().saturating_sub(log_height);
     let log_lines: Vec<Line> = app
         .logs
         .iter()
@@ -282,8 +218,10 @@ pub fn render(app: &mut App, frame: &mut Frame) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(COLOR_NEON_CYAN)),
     );
-    frame.render_widget(logs, body_chunks[1]);
+    frame.render_widget(logs, area);
+}
 
+pub fn render_help(app: &App, frame: &mut Frame, area: Rect) {
     let help_text = if app.input_mode {
         let history_hint = if app.search_history.is_empty() {
             String::new()
@@ -314,5 +252,5 @@ pub fn render(app: &mut App, frame: &mut Frame) {
         } else {
             Style::default()
         });
-    frame.render_widget(help, chunks[3]);
+    frame.render_widget(help, area);
 }

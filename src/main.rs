@@ -1,12 +1,12 @@
 mod app;
-mod audio;
 mod config;
+mod net;
 mod player;
 mod ui;
 
 use crate::app::{App, PlayerStatus};
-use crate::audio::AudioBackend;
 use crate::config::Config;
+use crate::net::AudioBackend;
 use crate::player::Player;
 use anyhow::Result;
 use crossterm::{
@@ -47,6 +47,33 @@ impl Drop for TerminalCleanupGuard {
             let _ = execute!(stdout, LeaveAlternateScreen);
         }
     }
+}
+
+fn check_dependencies() -> Result<()> {
+    let missing: Vec<&str> = [("mpv", "--version"), ("yt-dlp", "--version")]
+        .iter()
+        .filter(|(cmd, arg)| {
+            std::process::Command::new(cmd)
+                .arg(arg)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_err()
+        })
+        .map(|(cmd, _)| *cmd)
+        .collect();
+
+    if !missing.is_empty() {
+        eprintln!("\n❌ 启动失败：以下依赖未找到：");
+        for dep in &missing {
+            eprintln!("   - {dep}");
+        }
+        eprintln!("\n请先安装缺少的依赖后再启动：");
+        eprintln!("   brew install {}", missing.join(" "));
+        eprintln!();
+        anyhow::bail!("缺少必要依赖：{}", missing.join(", "));
+    }
+    Ok(())
 }
 
 fn print_version() {
@@ -101,6 +128,9 @@ async fn main() -> Result<()> {
         }
     }
 
+    // 进入 TUI 前检查外部依赖，失败时直接打印友好错误信息并退出
+    check_dependencies()?;
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -108,7 +138,7 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let config = Config::load();
+    let (config, config_warn) = Config::load_with_warning();
     let _ = Config::save_example();
 
     // 动态生成 socket 路径（基于 PID），避免多实例冲突
@@ -123,6 +153,10 @@ async fn main() -> Result<()> {
         let mut app_lock = app.lock().await;
         app_lock.current_source = config.search.source.clone();
         let play_mode_ok = app_lock.set_play_mode_from_config(&config.playback.default_mode);
+        // 如果配置文件解析时产生了警告，优先展示
+        if let Some(warn) = config_warn {
+            app_lock.add_log(format!("⚠ 配置警告: {}", warn));
+        }
         app_lock.add_log("配置加载完成".to_string());
         app_lock.add_log(format!(
             "数据源: {} ({})",

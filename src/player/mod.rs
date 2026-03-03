@@ -1,6 +1,9 @@
+mod playlist;
+mod volume;
+
 use crate::app::{App, PlayerStatus};
-use crate::audio::{AudioBackend, PauseState};
 use crate::config::Config;
+use crate::net::{AudioBackend, PauseState};
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, Mutex};
@@ -8,7 +11,7 @@ use tokio::task::JoinHandle;
 
 const LOG_CHANNEL_CAPACITY: usize = 256;
 
-fn spawn_log_forwarder(app: Arc<Mutex<App>>) -> Sender<String> {
+pub(crate) fn spawn_log_forwarder(app: Arc<Mutex<App>>) -> Sender<String> {
     let (tx, mut rx) = mpsc::channel::<String>(LOG_CHANNEL_CAPACITY);
     tokio::spawn(async move {
         while let Some(log) = rx.recv().await {
@@ -331,133 +334,32 @@ impl Player {
     }
 
     pub async fn volume_up(&self) {
-        self.change_volume_with_log(self.config.playback.volume_step)
+        volume::change_volume_with_log(&self.audio, &self.app, self.config.playback.volume_step)
             .await;
     }
 
     pub async fn volume_down(&self) {
-        self.change_volume_with_log(-self.config.playback.volume_step)
+        volume::change_volume_with_log(&self.audio, &self.app, -self.config.playback.volume_step)
             .await;
     }
 
-    async fn change_volume_with_log(&self, delta: i32) {
-        match self.audio.change_volume(delta).await {
-            Ok(_) => {
-                // 读取 mpv 实际更新后的音量（稍等一个事件循环让 IPC 刷新）
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                let vol = self.audio.get_volume().await;
-                let mut app_lock = self.app.lock().await;
-                app_lock.volume = vol;
-                let direction = if delta > 0 { "🔊" } else { "🔈" };
-                app_lock.add_log(format!("{} 音量: {}%", direction, vol));
-            }
-            Err(e) => {
-                let mut app_lock = self.app.lock().await;
-                app_lock.add_log(format!("音量调节失败: {}", e));
-            }
-        }
-    }
-
     pub async fn next_page(&self) {
-        let app_lock = self.app.lock().await;
-        let keyword = app_lock.last_search_keyword.clone();
-        let current_page = app_lock.current_page;
-        let total_pages = app_lock.total_pages;
-        drop(app_lock);
-
-        if keyword.is_empty() || current_page >= total_pages {
-            return;
-        }
-
-        let next_page = current_page + 1;
-        self.search_page(&keyword, next_page).await;
+        playlist::next_page(
+            &self.audio,
+            &self.app,
+            self.config.search.max_results,
+            &self.active_task,
+        )
+        .await;
     }
 
     pub async fn prev_page(&self) {
-        let app_lock = self.app.lock().await;
-        let keyword = app_lock.last_search_keyword.clone();
-        let current_page = app_lock.current_page;
-        drop(app_lock);
-
-        if keyword.is_empty() || current_page <= 1 {
-            return;
-        }
-
-        let prev_page = current_page - 1;
-        self.search_page(&keyword, prev_page).await;
-    }
-
-    async fn search_page(&self, keyword: &str, page: usize) {
-        // 先检查缓存
-        let mut app_lock = self.app.lock().await;
-        if let Some(cached_results) = app_lock.get_cached_page(page) {
-            let cached_results = cached_results.clone();
-            app_lock.current_page = page;
-            app_lock.set_search_results(cached_results, keyword.to_string());
-            app_lock.add_log(format!("第 {} 页（来自缓存）", page));
-            return;
-        }
-
-        if app_lock.is_loading_page {
-            app_lock.add_log("正在加载中，请稍候...".to_string());
-            return;
-        }
-
-        let request_id = app_lock.begin_async_request();
-        app_lock.is_loading_page = true;
-        drop(app_lock);
-
-        // 缓存未命中，执行搜索
-        let audio_c = Arc::clone(&self.audio);
-        let app_c = Arc::clone(&self.app);
-        let page_size = self.config.search.max_results;
-        let keyword_clone = keyword.to_string();
-
-        let task = tokio::spawn(async move {
-            let log_tx = spawn_log_forwarder(app_c.clone());
-
-            let result = audio_c
-                .search(&keyword_clone, page, |log| {
-                    let _ = log_tx.try_send(log);
-                })
-                .await;
-
-            match result {
-                Ok(results) => {
-                    let mut a = app_c.lock().await;
-                    if !a.is_active_request(request_id) {
-                        return;
-                    }
-                    if results.is_empty() {
-                        if page > 1 {
-                            a.total_pages = page - 1;
-                            a.add_log(format!("已到达最后一页（第 {} 页）", page - 1));
-                        } else {
-                            a.add_log("没有找到结果".to_string());
-                        }
-                    } else {
-                        let count = results.len();
-                        a.current_page = page;
-                        if count < page_size {
-                            a.total_pages = page;
-                        }
-                        a.cache_page(page, results.clone());
-                        a.set_search_results(results, keyword_clone);
-                        a.add_log(format!("第 {} 页，找到 {} 个结果", page, count));
-                    }
-                    a.is_loading_page = false;
-                }
-                Err(e) => {
-                    let mut a = app_c.lock().await;
-                    if !a.is_active_request(request_id) {
-                        return;
-                    }
-                    a.add_log(format!("搜索失败: {}", e));
-                    a.is_loading_page = false;
-                }
-            }
-        });
-
-        self.replace_active_task(task).await;
+        playlist::prev_page(
+            &self.audio,
+            &self.app,
+            self.config.search.max_results,
+            &self.active_task,
+        )
+        .await;
     }
 }
