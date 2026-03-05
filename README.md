@@ -178,12 +178,22 @@ maboroshi --help       # 显示帮助信息
    - 按 `Enter` 播放
    - 歌曲播放完毕会自动播放下一首（根据播放模式）
 
-## 🗂️ 文件位置
+## 🗂️ 文件位置与缓存清理
 
 - **配置文件**: `~/.config/maboroshi/config.toml`
 - **收藏列表**: `~/.maboroshi_favorites.json`（含所有分组数据）
+- **离线音频缓存**: `~/.cache/maboroshi/audio/`（用于秒开已播放歌曲）
 - **URL 缓存**: 内存中（重启后清空）
 - **mpv IPC Socket**: `/tmp/maboroshi.sock`（可配置）
+
+### 🧹 清理音频缓存
+
+为了实现"越用越快"和节省流量，程序会在后台将播放过的音频缓存到本地（受配置项 `offline_audio` 控制）。
+注意：**取消收藏不会自动删除对应的缓存文件**。如果你发现硬盘占用过大，可以直接清空缓存目录：
+
+```bash
+rm -rf ~/.cache/maboroshi/audio/*
+```
 
 ## ⚙️ 配置文件
 
