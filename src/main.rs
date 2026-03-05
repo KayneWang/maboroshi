@@ -10,7 +10,7 @@ use crate::net::AudioBackend;
 use crate::player::Player;
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
     let mut terminal_cleanup_guard = TerminalCleanupGuard::activate();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -153,28 +153,16 @@ async fn main() -> Result<()> {
         let mut app_lock = app.lock().await;
         app_lock.current_source = config.search.source.clone();
         let play_mode_ok = app_lock.set_play_mode_from_config(&config.playback.default_mode);
-        // 如果配置文件解析时产生了警告，优先展示
+        // 只在有警告/错误时记录日志
         if let Some(warn) = config_warn {
             app_lock.add_log(format!("⚠ 配置警告: {}", warn));
         }
-        app_lock.add_log("配置加载完成".to_string());
-        app_lock.add_log(format!(
-            "数据源: {} ({})",
-            config.search.source,
-            config.get_search_prefix()
-        ));
-        if play_mode_ok {
-            app_lock.add_log(format!("默认播放模式: {}", config.playback.default_mode));
-        } else {
+        if !play_mode_ok {
             app_lock.add_log(format!(
-                "默认播放模式无效: {}，已回退为 shuffle",
+                "⚠ 播放模式配置无效: {}，已回退为 shuffle",
                 config.playback.default_mode
             ));
         }
-        app_lock.add_log(format!(
-            "缓存设置: {} 首歌曲, {} 秒有效期",
-            config.cache.url_cache_size, config.cache.url_cache_ttl
-        ));
     }
 
     let audio = Arc::new(AudioBackend::new(config.clone()));
@@ -194,6 +182,7 @@ async fn main() -> Result<()> {
         VolumeDown,
         NextPage,
         PrevPage,
+        CreateGroup(String),
         Quit,
     }
 
@@ -209,9 +198,99 @@ async fn main() -> Result<()> {
         let mut pending_action = None;
 
         if event::poll(Duration::from_millis(10))? {
-            if let Event::Key(key) = event::read()? {
+            let evt = event::read()?;
+            // 括号粘贴模式：整段粘贴内容作为 Event::Paste 投递，不含换行，不会误触 Enter
+            if let Event::Paste(pasted) = evt {
                 let mut app_lock = app.lock().await;
                 if app_lock.input_mode {
+                    // 去掉粘贴内容中的换行符后追加到 buffer
+                    let clean: String = pasted
+                        .chars()
+                        .filter(|c| *c != '\n' && *c != '\r')
+                        .collect();
+                    app_lock.input_buffer.push_str(&clean);
+                    app_lock.history_reset();
+                }
+                continue;
+            }
+            if let Event::Key(key) = evt {
+                let mut app_lock = app.lock().await;
+                // ── 删除分组二次确认 ──────────────────────────────────
+                if app_lock.delete_confirm_mode {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            app_lock.delete_confirm_mode = false;
+                            app_lock.delete_current_group();
+                        }
+                        _ => {
+                            app_lock.delete_confirm_mode = false;
+                        }
+                    }
+                // ── 重命名分组输入模式 ──────────────────────────────
+                } else if app_lock.rename_mode {
+                    match key.code {
+                        KeyCode::Enter => {
+                            if !app_lock.input_buffer.is_empty() {
+                                let new_name = app_lock.input_buffer.clone();
+                                app_lock.rename_mode = false;
+                                app_lock.input_buffer.clear();
+                                app_lock.rename_group(new_name);
+                            }
+                        }
+                        KeyCode::Esc => {
+                            app_lock.rename_mode = false;
+                            app_lock.input_buffer.clear();
+                        }
+                        KeyCode::Backspace => {
+                            app_lock.input_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app_lock.input_buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                // ── 移动模式：分组选择浮层 ─────────────────────────────
+                } else if app_lock.move_mode {
+                    match key.code {
+                        KeyCode::Enter => {
+                            app_lock.confirm_move_song();
+                        }
+                        KeyCode::Esc => {
+                            app_lock.move_mode = false;
+                        }
+                        KeyCode::Down => {
+                            app_lock.move_mode_next();
+                        }
+                        KeyCode::Up => {
+                            app_lock.move_mode_prev();
+                        }
+                        _ => {}
+                    }
+                // ── 新建分组输入模式 ─────────────────────────────
+                } else if app_lock.group_input_mode {
+                    match key.code {
+                        KeyCode::Enter => {
+                            if !app_lock.input_buffer.is_empty() {
+                                let name = app_lock.input_buffer.clone();
+                                app_lock.group_input_mode = false;
+                                app_lock.input_buffer.clear();
+                                pending_action = Some(PendingAction::CreateGroup(name));
+                            }
+                        }
+                        KeyCode::Esc => {
+                            app_lock.group_input_mode = false;
+                            app_lock.input_buffer.clear();
+                        }
+                        KeyCode::Backspace => {
+                            app_lock.input_buffer.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app_lock.input_buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                // ── 搜索关键词输入模式 ─────────────────────────────────
+                } else if app_lock.input_mode {
                     match key.code {
                         KeyCode::Enter => {
                             if !app_lock.input_buffer.is_empty() {
@@ -227,7 +306,6 @@ async fn main() -> Result<()> {
                             app_lock.history_reset();
                             app_lock.input_mode = false;
                             app_lock.input_buffer.clear();
-                            app_lock.add_log("取消搜索".to_string());
                         }
                         KeyCode::Up => {
                             app_lock.history_prev();
@@ -256,7 +334,6 @@ async fn main() -> Result<()> {
                         KeyCode::Esc => {
                             app_lock.clear_search_results();
                             app_lock.restore_status_after_search();
-                            app_lock.add_log("取消搜索结果".to_string());
                         }
                         KeyCode::Up => {
                             app_lock.select_prev_search_result();
@@ -269,6 +346,9 @@ async fn main() -> Result<()> {
                         }
                         KeyCode::Char('f') => {
                             app_lock.toggle_favorite_from_search_result();
+                        }
+                        KeyCode::Char('F') => {
+                            app_lock.favorite_all_results();
                         }
                         KeyCode::Right => {
                             pending_action = Some(PendingAction::NextPage);
@@ -286,7 +366,41 @@ async fn main() -> Result<()> {
                         KeyCode::Char('s') => {
                             app_lock.input_mode = true;
                             app_lock.input_buffer.clear();
-                            app_lock.add_log("进入搜索模式".to_string());
+                        }
+                        // 新建分组
+                        KeyCode::Char('g') => {
+                            app_lock.group_input_mode = true;
+                            app_lock.input_buffer.clear();
+                        }
+                        // 重命名当前分组（预填当前名称）
+                        KeyCode::Char('R') => {
+                            let current_name = app_lock.active_group().name.clone();
+                            app_lock.rename_mode = true;
+                            app_lock.input_buffer = current_name;
+                        }
+                        // 删除当前分组（需要二次确认）
+                        KeyCode::Char('D') => {
+                            if app_lock.groups.len() > 1 {
+                                let group_name = app_lock.active_group().name.clone();
+                                app_lock.delete_confirm_mode = true;
+                                app_lock.add_log(format!(
+                                    "⚠ 删除分组「{}」? 按 y 确认，任意键取消",
+                                    group_name
+                                ));
+                            } else {
+                                app_lock.add_log("至少保留一个分组".to_string());
+                            }
+                        }
+                        // 移动歌曲到其他分组
+                        KeyCode::Char('M') => {
+                            app_lock.enter_move_mode();
+                        }
+                        // 切换分组
+                        KeyCode::Tab => {
+                            app_lock.select_next_group();
+                        }
+                        KeyCode::BackTab => {
+                            app_lock.select_prev_group();
                         }
                         KeyCode::Char('f') => {
                             if matches!(
@@ -390,6 +504,11 @@ async fn main() -> Result<()> {
                 player.prev_page().await;
                 continue;
             }
+            Some(PendingAction::CreateGroup(name)) => {
+                let mut app_lock = app.lock().await;
+                app_lock.create_group(name);
+                continue;
+            }
             Some(PendingAction::Quit) => {
                 player.quit().await;
                 break;
@@ -405,6 +524,10 @@ async fn main() -> Result<()> {
 
     terminal_cleanup_guard.disarm();
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableBracketedPaste
+    )?;
     Ok(())
 }

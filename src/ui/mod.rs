@@ -31,4 +31,6 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     widgets::render_list(app, frame, body_chunks[0]);
     widgets::render_logs(app, frame, body_chunks[1]);
     widgets::render_help(app, frame, chunks[3]);
+    // 移动模式浮层最后渲染，覆盖在所有内容之上
+    widgets::render_move_overlay(app, frame);
 }

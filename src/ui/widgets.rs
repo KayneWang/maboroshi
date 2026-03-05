@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph},
     Frame,
 };
 
@@ -53,7 +53,7 @@ pub fn render_status_and_gauge(app: &App, frame: &mut Frame, area: Rect) {
 
     let status_text = match &app.status {
         PlayerStatus::Waiting => {
-            if app.favorites.is_empty() {
+            if app.active_items().is_empty() {
                 "💡 按 's' 搜索音乐开始使用".to_string()
             } else {
                 "💡 等待播放".to_string()
@@ -144,9 +144,48 @@ pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
         let mut list_state = make_list_state(app.selected_search_result);
         frame.render_stateful_widget(search_list, area, &mut list_state);
     } else {
-        // 显示收藏列表
-        let favorite_items: Vec<ListItem> = app
-            .favorites
+        // ── 收藏夹：分组 Tab 栏 + 歌曲列表 ─────────────────────────────────
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // 分组 Tab 栏
+                Constraint::Min(1),    // 歌曲列表
+            ])
+            .split(area);
+
+        // 分组 Tab 栏
+        let tab_line: Vec<Span> = app
+            .groups
+            .iter()
+            .enumerate()
+            .flat_map(|(i, g)| {
+                let label = if i == app.selected_group {
+                    Span::styled(
+                        format!(" [{}] ", g.name),
+                        Style::default()
+                            .fg(COLOR_NEON_PINK)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    Span::styled(
+                        format!(" {} ", g.name),
+                        Style::default().fg(Color::DarkGray),
+                    )
+                };
+                // 分组间加分隔符
+                if i + 1 < app.groups.len() {
+                    vec![label, Span::raw("|")]
+                } else {
+                    vec![label]
+                }
+            })
+            .collect();
+        let tab_bar = Paragraph::new(Line::from(tab_line));
+        frame.render_widget(tab_bar, chunks[0]);
+
+        // 歌曲列表
+        let active_items = app.active_items();
+        let favorite_items: Vec<ListItem> = active_items
             .iter()
             .enumerate()
             .map(|(i, item)| {
@@ -186,18 +225,20 @@ pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
             })
             .collect();
 
+        let group_name = app.active_group().name.clone();
         let favorites_list = List::new(favorite_items).block(
             Block::default()
                 .title(format!(
-                    "♥ 收藏列表 ({}) - ↑↓ 选择 | Enter 播放 | 'f' 添加/移除",
-                    app.favorites.len()
+                    "♥ {} ({}) - ↑↓ 选择 | Tab 切换分组 | Enter 播放 | f 收藏/移除",
+                    group_name,
+                    app.active_items().len()
                 ))
                 .border_style(Style::default().fg(COLOR_NEON_PINK))
                 .borders(Borders::ALL),
         );
 
         let mut list_state = make_list_state(app.selected_favorite);
-        frame.render_stateful_widget(favorites_list, area, &mut list_state);
+        frame.render_stateful_widget(favorites_list, chunks[1], &mut list_state);
     }
 }
 
@@ -222,7 +263,19 @@ pub fn render_logs(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 pub fn render_help(app: &App, frame: &mut Frame, area: Rect) {
-    let help_text = if app.input_mode {
+    let help_text = if app.delete_confirm_mode {
+        format!(
+            " ⚠️  确认删除分组「{}」及其 {} 首收藏？ y 确认 | Esc 取消 ",
+            app.active_group().name,
+            app.active_items().len()
+        )
+    } else if app.rename_mode {
+        format!(" 重命名分组: {} | Enter 确认 | Esc 取消 ", app.input_buffer)
+    } else if app.move_mode {
+        " 移动到: ↑↓ 切换分组 | Enter 确认 | Esc 取消 ".to_string()
+    } else if app.group_input_mode {
+        format!(" 新建分组: {} | Enter 确认 | Esc 取消 ", app.input_buffer)
+    } else if app.input_mode {
         let history_hint = if app.search_history.is_empty() {
             String::new()
         } else {
@@ -233,24 +286,77 @@ pub fn render_help(app: &App, frame: &mut Frame, area: Rect) {
             app.input_buffer, history_hint
         )
     } else if matches!(app.status, PlayerStatus::SearchResults) {
-        " ↑↓ 选择 | ←→ 翻页 | Enter 播放 | f 收藏 | Esc 返回 | q 退出 ".to_string()
+        " ↑↓ 选择 | ←→ 翻页 | Enter 播放 | f 收藏 | F 全部收藏 | Esc 返回 | q 退出 ".to_string()
     } else if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
         " Space 暂停/继续 | ←→ 快退/快进 | +/- 音量 | f 收藏 | m 模式 | s 搜索 | q 退出 "
             .to_string()
     } else {
-        " s 搜索 | ↑↓ 选择收藏 | Enter 播放 | f 收藏 | m 模式 | q 退出 ".to_string()
+        " s 搜索 | ↑↓ 选曲 | Tab 切换分组 | g 新建 | R 重命名 | D 删除 | M 移动 | Enter 播放 | f 收藏 | m 模式 | q 退出 ".to_string()
+    };
+
+    let (border_color, text_color) = if app.delete_confirm_mode {
+        (Color::Red, Color::Red)
+    } else if app.input_mode || app.group_input_mode {
+        (COLOR_NEON_CYAN, Color::Yellow)
+    } else {
+        (COLOR_NEON_CYAN, Color::Reset)
     };
 
     let help = Paragraph::new(help_text)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(COLOR_NEON_CYAN)),
+                .border_style(Style::default().fg(border_color)),
         )
-        .style(if app.input_mode {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default()
-        });
+        .style(Style::default().fg(text_color));
     frame.render_widget(help, area);
+}
+
+/// 移动模式下的分组选择浮层
+pub fn render_move_overlay(app: &App, frame: &mut Frame) {
+    if !app.move_mode {
+        return;
+    }
+    // 计算浮层大小：宽 40，高 = 分组数 + 4
+    let height = (app.groups.len() as u16 + 4).min(frame.size().height);
+    let width = 44u16.min(frame.size().width);
+    let x = (frame.size().width.saturating_sub(width)) / 2;
+    let y = (frame.size().height.saturating_sub(height)) / 2;
+    let popup_area = Rect::new(x, y, width, height);
+
+    // 先用 Clear 清空背景，避免透溏
+    frame.render_widget(Clear, popup_area);
+
+    let item_label = app
+        .active_items()
+        .get(app.selected_favorite)
+        .map(|i| truncate_text(&i.title, 30))
+        .unwrap_or_default();
+
+    let items: Vec<ListItem> = app
+        .groups
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != app.selected_group) // 过滤掉当前分组
+        .map(|(i, g)| {
+            let is_target = i == app.move_target_group;
+            let marker = if is_target { "›" } else { " " };
+            let style = if is_target {
+                Style::default()
+                    .fg(COLOR_NEON_PINK)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(format!("{} {}", marker, g.name)).style(style)
+        })
+        .collect();
+
+    let popup = List::new(items).block(
+        Block::default()
+            .title(format!("移动「{}」到」", item_label))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(COLOR_NEON_PINK)),
+    );
+    frame.render_widget(popup, popup_area);
 }

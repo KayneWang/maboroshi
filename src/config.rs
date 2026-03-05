@@ -34,6 +34,9 @@ pub struct CacheConfig {
     pub url_cache_size: usize,
     #[serde(default = "default_cache_ttl")]
     pub url_cache_ttl: u64,
+    /// 是否在播放时于后台缓存音频文件供离线播放
+    #[serde(default = "default_offline_audio")]
+    pub offline_audio: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +61,9 @@ pub struct PathsConfig {
     pub socket_path: String,
     #[serde(default = "default_favorites_file")]
     pub favorites_file: String,
+    /// 音频文件的本地缓存目录
+    #[serde(default = "default_cache_dir")]
+    pub cache_dir: String,
 }
 
 // Default values
@@ -85,6 +91,10 @@ fn default_cache_ttl() -> u64 {
     7200 // 2 hours
 }
 
+fn default_offline_audio() -> bool {
+    true
+}
+
 fn default_play_timeout() -> u64 {
     10
 }
@@ -109,6 +119,10 @@ fn default_favorites_file() -> String {
     "~/.maboroshi_favorites.json".to_string()
 }
 
+fn default_cache_dir() -> String {
+    "~/.cache/maboroshi/audio".to_string()
+}
+
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
@@ -125,6 +139,7 @@ impl Default for CacheConfig {
         Self {
             url_cache_size: default_cache_size(),
             url_cache_ttl: default_cache_ttl(),
+            offline_audio: default_offline_audio(),
         }
     }
 }
@@ -152,6 +167,7 @@ impl Default for PathsConfig {
         Self {
             socket_path: default_socket_path(),
             favorites_file: default_favorites_file(),
+            cache_dir: default_cache_dir(),
         }
     }
 }

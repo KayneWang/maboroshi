@@ -76,12 +76,10 @@ pub async fn search_page(
         let cached_results = cached_results.clone();
         app_lock.current_page = page;
         app_lock.set_search_results(cached_results, keyword.to_string());
-        app_lock.add_log(format!("第 {} 页（来自缓存）", page));
         return;
     }
 
     if app_lock.is_loading_page {
-        app_lock.add_log("正在加载中，请稍候...".to_string());
         return;
     }
 
@@ -124,7 +122,6 @@ pub async fn search_page(
                     }
                     a.cache_page(page, results.clone());
                     a.set_search_results(results, keyword_clone);
-                    a.add_log(format!("第 {} 页，找到 {} 个结果", page, count));
                 }
                 a.is_loading_page = false;
             }

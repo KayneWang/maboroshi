@@ -11,13 +11,10 @@ use tokio::task::JoinHandle;
 
 const LOG_CHANNEL_CAPACITY: usize = 256;
 
-pub(crate) fn spawn_log_forwarder(app: Arc<Mutex<App>>) -> Sender<String> {
-    let (tx, mut rx) = mpsc::channel::<String>(LOG_CHANNEL_CAPACITY);
-    tokio::spawn(async move {
-        while let Some(log) = rx.recv().await {
-            app.lock().await.add_log(log);
-        }
-    });
+/// 创建一个日志丢弃通道（yt-dlp 输出不展示给用户）
+pub(crate) fn spawn_log_forwarder(_app: Arc<Mutex<App>>) -> Sender<String> {
+    let (tx, _rx) = mpsc::channel::<String>(LOG_CHANNEL_CAPACITY);
+    // _rx 被丢弃，所有 yt-dlp 输出静默丢弃
     tx
 }
 
@@ -127,7 +124,6 @@ impl Player {
                     if !a.is_active_request(request_id) {
                         return;
                     }
-                    a.add_log(format!("从搜索结果播放: {}", title));
                     a.status = PlayerStatus::Searching;
                     a.current_song = title.clone();
                     a.progress = 0.0;
@@ -145,7 +141,6 @@ impl Player {
                         if !a.is_active_request(request_id) {
                             return;
                         }
-                        a.add_log("播放成功，设置状态".to_string());
                         a.status = PlayerStatus::Playing;
                         a.current_song = title.clone();
                         a.sync_selected_favorite();
