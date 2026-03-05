@@ -24,12 +24,17 @@ pub fn render_title(app: &App, frame: &mut Frame, area: Rect) {
     };
     let source_badge = app.current_source.to_uppercase();
 
+    let pagination_badge = if app.input_mode || !app.search_results.is_empty() {
+        format!(" [P{}/{}]", app.current_page, total_pages_text)
+    } else {
+        String::new()
+    };
+
     let title_text = format!(
-        " 🌀 Maboroshi - 幻 | {} [{}] [P{}/{}] [VOL:{}%]{} ",
+        " 🌀 Maboroshi - 幻 | {} [{}]{} [VOL:{}%]{} ",
         app.get_play_mode_text(),
         source_badge,
-        app.current_page,
-        total_pages_text,
+        pagination_badge,
         app.volume,
         loading_badge
     );
