@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
     enum PendingAction {
         Search(String),
         PlaySelectedResult,
-        SearchAndPlay(String),
+        SearchAndPlay(String, Option<String>),
         TogglePause,
         SeekForward,
         SeekBackward,
@@ -427,9 +427,10 @@ async fn main() -> Result<()> {
                             if let Some(item) = app_lock.get_selected_favorite() {
                                 let song = item.title.clone();
                                 let source = item.source.clone();
+                                let path = item.local_path.clone();
                                 app_lock.add_log(format!("从收藏播放: {} [{}]", song, source));
                                 app_lock.current_source = source;
-                                pending_action = Some(PendingAction::SearchAndPlay(song));
+                                pending_action = Some(PendingAction::SearchAndPlay(song, path));
                             }
                         }
                         KeyCode::Char(' ') => {
@@ -472,8 +473,8 @@ async fn main() -> Result<()> {
                 player.play_selected_result().await;
                 continue;
             }
-            Some(PendingAction::SearchAndPlay(song)) => {
-                player.search_and_play(song).await;
+            Some(PendingAction::SearchAndPlay(song, local_path)) => {
+                player.search_and_play(song, local_path).await;
                 continue;
             }
             Some(PendingAction::TogglePause) => {

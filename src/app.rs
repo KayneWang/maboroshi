@@ -27,6 +27,8 @@ pub enum PlayMode {
 pub struct FavoriteItem {
     pub title: String,
     pub source: String,
+    #[serde(default)]
+    pub local_path: Option<String>,
 }
 
 /// 收藏分组：一个命名的歌曲集合
@@ -65,6 +67,7 @@ pub struct App {
     pub running: bool,
     pub status: PlayerStatus,
     pub current_song: String,
+    pub current_local_path: Option<String>,
     pub progress: f64,
     pub volume: u8,
     pub logs: VecDeque<String>,
@@ -229,6 +232,7 @@ impl App {
             running: true,
             status: PlayerStatus::Waiting,
             current_song: String::new(),
+            current_local_path: None,
             progress: 0.0,
             volume: 100,
             logs,
@@ -510,6 +514,7 @@ impl App {
                 group.items.push(FavoriteItem {
                     title: song.clone(),
                     source,
+                    local_path: self.current_local_path.clone(),
                 });
                 (false, name)
             }
@@ -559,6 +564,7 @@ impl App {
                     group.items.push(FavoriteItem {
                         title: title.clone(),
                         source,
+                        local_path: None,
                     });
                     (false, name)
                 }
@@ -594,6 +600,7 @@ impl App {
                 group.items.push(FavoriteItem {
                     title: result.title.clone(),
                     source: source.clone(),
+                    local_path: None,
                 });
                 added += 1;
             }
@@ -616,6 +623,23 @@ impl App {
         self.active_items()
             .iter()
             .any(|item| item.title == self.current_song)
+    }
+
+    pub fn update_favorite_local_path(&mut self, song: &str, local_path: String) {
+        let mut save_needed = false;
+        for group in &mut self.groups {
+            for item in &mut group.items {
+                if item.title == song && item.local_path != Some(local_path.clone()) {
+                    item.local_path = Some(local_path.clone());
+                    save_needed = true;
+                }
+            }
+        }
+        if save_needed {
+            if let Err(e) = Self::save_favorites(&self.groups, &self.favorites_path) {
+                self.add_log(format!("回写 local_path 失败: {}", e));
+            }
+        }
     }
 
     // ── 收藏列表导航 ──────────────────────────────────────────────────────────
@@ -827,12 +851,12 @@ impl App {
 
     // ── 自动播放下一首 ────────────────────────────────────────────────────────
 
-    pub fn get_next_song(&mut self) -> Option<String> {
+    pub fn get_next_song(&mut self) -> Option<(String, Option<String>)> {
         let items = self.active_items();
         match self.play_mode {
             PlayMode::Single => {
                 if !self.current_song.is_empty() {
-                    Some(self.current_song.clone())
+                    Some((self.current_song.clone(), self.current_local_path.clone()))
                 } else {
                     None
                 }
@@ -844,7 +868,10 @@ impl App {
                 }
                 if len == 1 {
                     self.selected_favorite = 0;
-                    return Some(self.active_items()[0].title.clone());
+                    return Some((
+                        self.active_items()[0].title.clone(),
+                        self.active_items()[0].local_path.clone(),
+                    ));
                 }
                 let current_song = self.current_song.clone();
                 let mut idx = self.simple_random(len);
@@ -859,7 +886,10 @@ impl App {
                     }
                 }
                 self.selected_favorite = idx;
-                Some(self.active_items()[idx].title.clone())
+                Some((
+                    self.active_items()[idx].title.clone(),
+                    self.active_items()[idx].local_path.clone(),
+                ))
             }
             PlayMode::ListLoop | PlayMode::Sequential => {
                 let len = self.active_items().len();
@@ -875,11 +905,17 @@ impl App {
                     let next_idx = current_idx + 1;
                     if next_idx < self.active_items().len() {
                         self.selected_favorite = next_idx;
-                        return Some(self.active_items()[next_idx].title.clone());
+                        return Some((
+                            self.active_items()[next_idx].title.clone(),
+                            self.active_items()[next_idx].local_path.clone(),
+                        ));
                     } else if self.play_mode == PlayMode::ListLoop {
                         self.selected_favorite = 0;
                         self.add_log("列表循环，回到第一首".to_string());
-                        return Some(self.active_items()[0].title.clone());
+                        return Some((
+                            self.active_items()[0].title.clone(),
+                            self.active_items()[0].local_path.clone(),
+                        ));
                     }
                 } else {
                     self.add_log(format!("当前歌曲 '{}' 不在当前分组中", self.current_song));

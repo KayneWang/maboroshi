@@ -10,7 +10,14 @@ use tokio::time::timeout;
 #[derive(Clone)]
 pub struct CachedSong {
     pub url: String,
+    pub local_path: Option<String>,
     pub cached_at: SystemTime,
+}
+
+#[derive(Clone, Debug)]
+pub struct StreamInfo {
+    pub url: String,
+    pub local_path: Option<String>,
 }
 
 pub type UrlCache = HashMap<String, CachedSong>;
@@ -215,7 +222,7 @@ pub async fn fetch_stream_url<F>(
     keyword: &str,
     is_cache_valid: impl Fn(SystemTime) -> bool,
     mut log_fn: F,
-) -> Result<String>
+) -> Result<StreamInfo>
 where
     F: FnMut(String),
 {
@@ -228,11 +235,14 @@ where
     //   b. 内存未命中时，用 --dump-json 得到 id/url/ext，一次搞定
 
     // a. 检查内存 URL 缓存
-    if let Some(cached_url) = {
+    if let Some(cached_info) = {
         let cache_guard = cache.lock().await;
         cache_guard.get(keyword).and_then(|c| {
             if is_cache_valid(c.cached_at) {
-                Some(c.url.clone())
+                Some(StreamInfo {
+                    url: c.url.clone(),
+                    local_path: c.local_path.clone(),
+                })
             } else {
                 None
             }
@@ -240,7 +250,7 @@ where
     } {
         // 内存缓存命中的 URL 可能已经是一个本地路径（之前被替换过）
         log_fn("✓ 使用内存缓存的 URL".to_string());
-        return Ok(cached_url);
+        return Ok(cached_info);
     }
 
     // b. 执行 yt-dlp --dump-json 获取完整元数据（包含 url、id、ext）
@@ -332,11 +342,17 @@ where
             keyword.to_string(),
             CachedSong {
                 url: local_url.clone(),
+                local_path: Some(local_url.clone()),
                 cached_at: SystemTime::now(),
             },
         );
-        return Ok(local_url);
+        return Ok(StreamInfo {
+            url: local_url.clone(),
+            local_path: Some(local_url),
+        });
     }
+
+    let mut generated_local_path = None;
 
     // ── 3. 触发后台离线音频下载任务 ──────────────────────────────────────────
     if config.cache.offline_audio && !video_id.is_empty() {
@@ -346,6 +362,9 @@ where
             let path_clone = path.clone();
             let config_clone = config.clone();
             let output_path = cache_dir.join(format!("{}.{}", video_id, ext));
+
+            // 后台下载时也能预知本地路径
+            generated_local_path = Some(output_path.to_string_lossy().to_string());
 
             // 只在目标文件不存在时启动后台下载
             if !output_path.exists() {
@@ -376,6 +395,7 @@ where
                 keyword.to_string(),
                 CachedSong {
                     url: stream_url.clone(),
+                    local_path: generated_local_path.clone(),
                     cached_at: SystemTime::now(),
                 },
             );
@@ -391,5 +411,8 @@ where
         }
     }
     log_fn("✓ 已缓存 URL".to_string());
-    Ok(stream_url)
+    Ok(StreamInfo {
+        url: stream_url,
+        local_path: generated_local_path,
+    })
 }

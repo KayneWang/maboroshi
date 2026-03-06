@@ -66,7 +66,12 @@ impl AudioBackend {
 
     // ── 搜索并播放 ────────────────────────────────────────────────────────────
 
-    pub async fn search_and_play<F>(&self, keyword: &str, mut log_fn: F) -> Result<()>
+    pub async fn search_and_play<F>(
+        &self,
+        keyword: &str,
+        local_path_hint: Option<String>,
+        mut log_fn: F,
+    ) -> Result<Option<String>>
     where
         F: FnMut(String),
     {
@@ -77,14 +82,33 @@ impl AudioBackend {
             let _ = std::fs::remove_file(&self.socket_path);
         }
 
-        let stream_url = ytdlp::fetch_stream_url(
-            &self.config,
-            &self.cache,
-            keyword,
-            |cached_at| self.is_cache_valid(cached_at),
-            &mut log_fn,
-        )
-        .await?;
+        let (stream_url, out_local_path) = if let Some(path) = local_path_hint {
+            if std::path::Path::new(&path).exists() {
+                log_fn(format!("✓ 命中缓存路径: {}", path));
+                (path.clone(), Some(path))
+            } else {
+                log_fn(format!("⚠ 缓存路径失效或文件不存在，重新解析: {}", path));
+                let info = ytdlp::fetch_stream_url(
+                    &self.config,
+                    &self.cache,
+                    keyword,
+                    |cached_at| self.is_cache_valid(cached_at),
+                    &mut log_fn,
+                )
+                .await?;
+                (info.url, info.local_path)
+            }
+        } else {
+            let info = ytdlp::fetch_stream_url(
+                &self.config,
+                &self.cache,
+                keyword,
+                |cached_at| self.is_cache_valid(cached_at),
+                &mut log_fn,
+            )
+            .await?;
+            (info.url, info.local_path)
+        };
 
         // 启动 mpv
         log_fn("启动 mpv 播放器".to_string());
@@ -146,7 +170,7 @@ impl AudioBackend {
             *ipc_task_lock = Some(handle);
         }
 
-        Ok(())
+        Ok(out_local_path)
     }
 
     // ── 播放状态查询 ──────────────────────────────────────────────────────────

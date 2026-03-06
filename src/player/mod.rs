@@ -130,19 +130,23 @@ impl Player {
                 }
 
                 let result = audio_c
-                    .search_and_play(&title, |log| {
+                    .search_and_play(&title, None, |log| {
                         let _ = log_tx.try_send(log);
                     })
                     .await;
 
                 match result {
-                    Ok(_) => {
+                    Ok(out_local_path) => {
                         let mut a = app_c.lock().await;
                         if !a.is_active_request(request_id) {
                             return;
                         }
                         a.status = PlayerStatus::Playing;
                         a.current_song = title.clone();
+                        a.current_local_path = out_local_path.clone();
+                        if let Some(path) = out_local_path {
+                            a.update_favorite_local_path(&title, path);
+                        }
                         a.sync_selected_favorite();
                     }
                     Err(e) => {
@@ -160,11 +164,12 @@ impl Player {
         }
     }
 
-    pub async fn search_and_play(&self, song: String) {
+    pub async fn search_and_play(&self, song: String, local_path_hint: Option<String>) {
         let mut app_lock = self.app.lock().await;
         let request_id = app_lock.begin_async_request();
         app_lock.status = PlayerStatus::Searching;
         app_lock.current_song = song.clone();
+        app_lock.current_local_path = local_path_hint.clone();
         app_lock.progress = 0.0;
         drop(app_lock);
 
@@ -175,19 +180,23 @@ impl Player {
             let log_tx = spawn_log_forwarder(app_c.clone());
 
             let result = audio_c
-                .search_and_play(&song, |log| {
+                .search_and_play(&song, local_path_hint, |log| {
                     let _ = log_tx.try_send(log);
                 })
                 .await;
 
             match result {
-                Ok(_) => {
+                Ok(out_local_path) => {
                     let mut a = app_c.lock().await;
                     if !a.is_active_request(request_id) {
                         return;
                     }
                     a.status = PlayerStatus::Playing;
                     a.current_song = song.clone();
+                    a.current_local_path = out_local_path.clone();
+                    if let Some(path) = out_local_path {
+                        a.update_favorite_local_path(&song, path);
+                    }
                     a.sync_selected_favorite();
                 }
                 Err(e) => {
@@ -243,19 +252,19 @@ impl Player {
 
         // 错误恢复：检测到错误状态时自动播放下一首
         if let PlayerStatus::Error(_) = current_status {
-            let next_song = {
+            let next_song_data = {
                 let mut app_lock = self.app.lock().await;
-                if let Some(next_song) = app_lock.get_next_song() {
+                if let Some((next_song, next_path)) = app_lock.get_next_song() {
                     app_lock.add_log(format!("自动跳过错误，播放下一首: {}", next_song));
-                    Some(next_song)
+                    Some((next_song, next_path))
                 } else {
                     app_lock.add_log("没有更多歌曲可播放".to_string());
                     None
                 }
             };
 
-            if let Some(next_song) = next_song {
-                self.search_and_play(next_song).await;
+            if let Some((next_song, next_path)) = next_song_data {
+                self.search_and_play(next_song, next_path).await;
             }
             return;
         }
@@ -267,7 +276,7 @@ impl Player {
         let progress_result = self.audio.get_progress().await;
         let pause_state_result = self.audio.get_pause_state().await;
 
-        let next_song = {
+        let next_song_data = {
             let mut app_lock = self.app.lock().await;
 
             app_lock.progress = progress_result;
@@ -286,9 +295,9 @@ impl Player {
                     None
                 }
                 PauseState::Stopped => {
-                    if let Some(next_song) = app_lock.get_next_song() {
+                    if let Some((next_song, next_path)) = app_lock.get_next_song() {
                         app_lock.add_log(format!("自动播放下一首: {}", next_song));
-                        Some(next_song)
+                        Some((next_song, next_path))
                     } else {
                         app_lock.status = PlayerStatus::Waiting;
                         app_lock.add_log("播放完成".to_string());
@@ -298,8 +307,8 @@ impl Player {
             }
         };
 
-        if let Some(next_song) = next_song {
-            self.search_and_play(next_song).await;
+        if let Some((next_song, next_path)) = next_song_data {
+            self.search_and_play(next_song, next_path).await;
         }
     }
 
