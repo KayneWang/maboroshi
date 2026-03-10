@@ -38,7 +38,7 @@ pub fn render_status_and_gauge(app: &App, frame: &mut Frame, area: Rect) {
     );
 
     let status_text = match &app.status {
-        PlayerStatus::Waiting => "💡 按 's' 搜索音乐".to_string(),
+        PlayerStatus::Waiting => "等待播放".to_string(),
         PlayerStatus::Searching => format!("{} 正在搜索...", spinner_frame()),
         PlayerStatus::SearchResults => format!("🎯 找到 {} 首", app.search_results.len()),
         PlayerStatus::Playing => format!("▶ 正在播放: {}", app.current_song),
