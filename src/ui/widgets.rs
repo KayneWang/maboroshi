@@ -1,86 +1,67 @@
 use crate::app::{App, PlayerStatus};
 use crate::ui::theme::{
-    make_list_state, selected_style, spinner_frame, style_for_log_line, truncate_text,
-    COLOR_NEON_CYAN, COLOR_NEON_GREEN, COLOR_NEON_PINK, COLOR_WARNING,
+    self, selected_style, spinner_frame, style_for_log_line, truncate_text, COLOR_NEON_CYAN,
+    COLOR_NEON_PINK,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap},
     Frame,
 };
-
-pub fn render_title(app: &App, frame: &mut Frame, area: Rect) {
-    let total_pages_text = if app.total_pages == usize::MAX {
-        "?".to_string()
-    } else {
-        app.total_pages.to_string()
-    };
-    let loading_badge = if app.is_loading_page || matches!(app.status, PlayerStatus::Searching) {
-        format!(" [{} LOADING]", spinner_frame())
-    } else {
-        String::new()
-    };
-    let source_badge = app.current_source.to_uppercase();
-
-    let pagination_badge = if app.input_mode || !app.search_results.is_empty() {
-        format!(" [P{}/{}]", app.current_page, total_pages_text)
-    } else {
-        String::new()
-    };
-
-    let title_text = format!(
-        " 🌀 Maboroshi - 幻 | {} [{}]{} [VOL:{}%]{} ",
-        app.get_play_mode_text(),
-        source_badge,
-        pagination_badge,
-        app.volume,
-        loading_badge
-    );
-    let title = Paragraph::new(title_text).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(COLOR_NEON_CYAN))
-            .style(Style::default().fg(COLOR_NEON_CYAN)),
-    );
-    frame.render_widget(title, area);
-}
 
 pub fn render_status_and_gauge(app: &App, frame: &mut Frame, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // 状态文本
-            Constraint::Min(1),    // 进度条
+            Constraint::Length(1), // 标题与状态同行
+            Constraint::Length(1), // 进度条
         ])
+        .margin(1) // 为外围Block留出空间
         .split(area);
 
+    let gauge_color = match app.status {
+        PlayerStatus::Playing => theme::COLOR_NEON_PINK,
+        PlayerStatus::Paused => theme::COLOR_WARNING,
+        PlayerStatus::Searching => theme::COLOR_NEON_CYAN,
+        PlayerStatus::SearchResults => theme::COLOR_NEON_GREEN,
+        PlayerStatus::Error(_) => Color::Red,
+        PlayerStatus::Waiting => theme::COLOR_INACTIVE,
+    };
+
+    // --- Header Text ---
+    let title_prefix = format!(
+        "🌀 Maboroshi | {} [{}] ",
+        app.get_play_mode_text(),
+        app.current_source.to_uppercase()
+    );
+
     let status_text = match &app.status {
-        PlayerStatus::Waiting => {
-            if app.active_items().is_empty() {
-                "💡 按 's' 搜索音乐开始使用".to_string()
-            } else {
-                "💡 等待播放".to_string()
-            }
-        }
+        PlayerStatus::Waiting => "💡 按 's' 搜索音乐".to_string(),
         PlayerStatus::Searching => format!("{} 正在搜索...", spinner_frame()),
         PlayerStatus::SearchResults => format!("🎯 找到 {} 首", app.search_results.len()),
-        PlayerStatus::Playing => format!("▶ {}", app.current_song),
-        PlayerStatus::Paused => format!("⏸ {}", app.current_song),
+        PlayerStatus::Playing => format!("▶ 正在播放: {}", app.current_song),
+        PlayerStatus::Paused => format!("⏸ 暂停: {}", app.current_song),
         PlayerStatus::Error(e) => format!("❌ {}", e),
     };
 
-    let gauge_color = match app.status {
-        PlayerStatus::Playing => COLOR_NEON_PINK,
-        PlayerStatus::Paused => COLOR_WARNING,
-        PlayerStatus::Searching => COLOR_NEON_CYAN,
-        PlayerStatus::SearchResults => COLOR_NEON_GREEN,
-        PlayerStatus::Error(_) => Color::Red,
-        PlayerStatus::Waiting => Color::LightBlue,
-    };
-
     let favorite_indicator = if app.is_favorite() { " ⭐" } else { "" };
+    let vol_text = format!(" [VOL:{}%]", app.volume);
+
+    let full_status = format!(
+        "{}{}{}{}",
+        title_prefix, status_text, favorite_indicator, vol_text
+    );
+
+    let header_line = Paragraph::new(Span::styled(
+        full_status,
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    // --- Progress Gauge ---
     let progress_label = if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
         let pct = if app.progress.is_finite() {
             app.progress
@@ -92,38 +73,88 @@ pub fn render_status_and_gauge(app: &App, frame: &mut Frame, area: Rect) {
         String::new()
     };
 
-    let status_line = Paragraph::new(format!("{}{}", status_text, favorite_indicator)).block(
-        Block::default()
-            .title("状态")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(gauge_color)),
-    );
-    frame.render_widget(status_line, chunks[0]);
-
     let gauge = Gauge::default()
         .gauge_style(Style::default().fg(gauge_color))
         .percent((app.progress * 100.0).clamp(0.0, 100.0) as u16)
-        .label(progress_label);
+        .label(Span::styled(
+            progress_label,
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    // --- Container Block ---
+    let block = theme::default_block()
+        .title(" 控制台 ")
+        .border_style(Style::default().fg(gauge_color.clone()));
+
+    frame.render_widget(block, area);
+    frame.render_widget(header_line, chunks[0]);
     frame.render_widget(gauge, chunks[1]);
 }
 
-pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
-    let list_text_max = area.width.saturating_sub(8) as usize;
+pub fn render_groups(app: &mut App, frame: &mut Frame, area: Rect) {
+    let group_items: Vec<ListItem> = app
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let is_selected = i == app.selected_group;
 
-    if matches!(app.status, PlayerStatus::SearchResults) && !app.search_results.is_empty() {
+            let style = if is_selected {
+                selected_style()
+            } else {
+                Style::default().fg(theme::COLOR_INACTIVE)
+            };
+
+            let marker = if is_selected { "▶" } else { " " };
+            ListItem::new(format!("{} {}", marker, g.name)).style(style)
+        })
+        .collect();
+
+    let groups_list = List::new(group_items).block(
+        theme::default_block()
+            .title(" 🗂  分组 (Tab) ")
+            .border_style(Style::default().fg(theme::COLOR_NEON_CYAN)),
+    );
+
+    let mut list_state = theme::make_list_state(app.selected_group);
+    frame.render_stateful_widget(groups_list, area, &mut list_state);
+}
+
+pub fn render_items(app: &mut App, frame: &mut Frame, area: Rect) {
+    let list_text_max = area.width.saturating_sub(6) as usize;
+
+    if !app.search_results.is_empty() {
+        // --- 渲染搜索结果 ---
         let search_items: Vec<ListItem> = app
             .search_results
             .iter()
             .enumerate()
             .map(|(i, result)| {
                 let is_selected = i == app.selected_search_result;
+                let is_playing = result.title == app.current_song
+                    && matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused);
+
                 let style = if is_selected {
                     selected_style()
+                } else if is_playing {
+                    Style::default()
+                        .fg(theme::COLOR_NEON_GREEN)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
+
+                let marker = if is_playing {
+                    "▶"
+                } else if is_selected {
+                    "›"
+                } else {
+                    " "
+                };
                 let base = format!("{}. {}", i + 1, result.title);
-                let marker = if is_selected { "›" } else { " " };
+
                 ListItem::new(format!(
                     "{} {}",
                     marker,
@@ -133,62 +164,20 @@ pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
             })
             .collect();
 
-        let search_list = List::new(search_items)
-            .block(
-                Block::default()
-                    .title(format!(
-                        "🎯 搜索结果 ({}) - 第 {} 页 | ←→ 上一页/下一页 | ↑↓ 选择 | Enter 播放 | 'f' 收藏",
-                        app.search_results.len(),
-                        app.current_page
-                    ))
-                    .border_style(Style::default().fg(COLOR_NEON_CYAN))
-                    .borders(Borders::ALL),
-            )
-            .highlight_style(selected_style());
+        let search_list = List::new(search_items).block(
+            theme::default_block()
+                .title(format!(
+                    " 🎯 搜索结果 ({}) - 第 {} 页 ",
+                    app.search_results.len(),
+                    app.current_page
+                ))
+                .border_style(Style::default().fg(theme::COLOR_NEON_PINK)),
+        );
 
-        let mut list_state = make_list_state(app.selected_search_result);
+        let mut list_state = theme::make_list_state(app.selected_search_result);
         frame.render_stateful_widget(search_list, area, &mut list_state);
     } else {
-        // ── 收藏夹：分组 Tab 栏 + 歌曲列表 ─────────────────────────────────
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1), // 分组 Tab 栏
-                Constraint::Min(1),    // 歌曲列表
-            ])
-            .split(area);
-
-        // 分组 Tab 栏
-        let tab_line: Vec<Span> = app
-            .groups
-            .iter()
-            .enumerate()
-            .flat_map(|(i, g)| {
-                let label = if i == app.selected_group {
-                    Span::styled(
-                        format!(" [{}] ", g.name),
-                        Style::default()
-                            .fg(COLOR_NEON_PINK)
-                            .add_modifier(Modifier::BOLD),
-                    )
-                } else {
-                    Span::styled(
-                        format!(" {} ", g.name),
-                        Style::default().fg(Color::DarkGray),
-                    )
-                };
-                // 分组间加分隔符
-                if i + 1 < app.groups.len() {
-                    vec![label, Span::raw("|")]
-                } else {
-                    vec![label]
-                }
-            })
-            .collect();
-        let tab_bar = Paragraph::new(Line::from(tab_line));
-        frame.render_widget(tab_bar, chunks[0]);
-
-        // 歌曲列表
+        // --- 渲染分组曲目 ---
         let active_items = app.active_items();
         let favorite_items: Vec<ListItem> = active_items
             .iter()
@@ -202,7 +191,7 @@ pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
                     selected_style()
                 } else if is_playing {
                     Style::default()
-                        .fg(COLOR_NEON_GREEN)
+                        .fg(theme::COLOR_NEON_GREEN)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -213,10 +202,11 @@ pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
                 } else {
                     format!("{} [{}]", item.title, item.source)
                 };
-                let marker = if is_selected {
-                    "›"
-                } else if is_playing {
+
+                let marker = if is_playing {
                     "▶"
+                } else if is_selected {
+                    "›"
                 } else {
                     "♥"
                 };
@@ -232,18 +222,17 @@ pub fn render_list(app: &mut App, frame: &mut Frame, area: Rect) {
 
         let group_name = app.active_group().name.clone();
         let favorites_list = List::new(favorite_items).block(
-            Block::default()
+            theme::default_block()
                 .title(format!(
-                    "♥ {} ({}) - ↑↓ 选择 | Tab 切换分组 | Enter 播放 | f 收藏/移除",
+                    " 🎵 {} ({}) ",
                     group_name,
                     app.active_items().len()
                 ))
-                .border_style(Style::default().fg(COLOR_NEON_PINK))
-                .borders(Borders::ALL),
+                .border_style(Style::default().fg(theme::COLOR_NEON_PINK)),
         );
 
-        let mut list_state = make_list_state(app.selected_favorite);
-        frame.render_stateful_widget(favorites_list, chunks[1], &mut list_state);
+        let mut list_state = theme::make_list_state(app.selected_favorite);
+        frame.render_stateful_widget(favorites_list, area, &mut list_state);
     }
 }
 
@@ -268,52 +257,107 @@ pub fn render_logs(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 pub fn render_help(app: &App, frame: &mut Frame, area: Rect) {
-    let help_text = if app.delete_confirm_mode {
-        format!(
-            " ⚠️  确认删除分组「{}」及其 {} 首收藏？ y 确认 | Esc 取消 ",
-            app.active_group().name,
-            app.active_items().len()
-        )
+    let mut spans = Vec::new();
+
+    // 辅助函数：生成形如 " [Key] Action " 的样式
+    let add_bind = |s: &mut Vec<Span<'static>>, key: &str, action: &str| {
+        s.push(Span::raw(" "));
+        s.push(Span::styled(
+            format!("[{}]", key),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ));
+        s.push(Span::styled(
+            format!(" {}", action),
+            Style::default().fg(Color::Gray),
+        ));
+    };
+
+    let border_color = if app.delete_confirm_mode {
+        spans.push(Span::styled(
+            format!(
+                " ⚠️  确认删除分组「{}」及其 {} 首收藏？ ",
+                app.active_group().name,
+                app.active_items().len()
+            ),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+        add_bind(&mut spans, "y", "确认");
+        add_bind(&mut spans, "Esc", "取消");
+        Color::Red
     } else if app.rename_mode {
-        format!(" 重命名分组: {} | Enter 确认 | Esc 取消 ", app.input_buffer)
+        spans.push(Span::styled(
+            format!(" 重命名分组: {} ", app.input_buffer),
+            Style::default().fg(Color::Yellow),
+        ));
+        add_bind(&mut spans, "Enter", "确认");
+        add_bind(&mut spans, "Esc", "取消");
+        theme::COLOR_NEON_CYAN
     } else if app.move_mode {
-        " 移动到: ↑↓ 切换分组 | Enter 确认 | Esc 取消 ".to_string()
+        spans.push(Span::styled(
+            " 移动到: ",
+            Style::default().fg(Color::Yellow),
+        ));
+        add_bind(&mut spans, "↑↓", "切换分组");
+        add_bind(&mut spans, "Enter", "确认");
+        add_bind(&mut spans, "Esc", "取消");
+        theme::COLOR_NEON_CYAN
     } else if app.group_input_mode {
-        format!(" 新建分组: {} | Enter 确认 | Esc 取消 ", app.input_buffer)
+        spans.push(Span::styled(
+            format!(" 新建分组: {} ", app.input_buffer),
+            Style::default().fg(Color::Yellow),
+        ));
+        add_bind(&mut spans, "Enter", "确认");
+        add_bind(&mut spans, "Esc", "取消");
+        theme::COLOR_NEON_CYAN
     } else if app.input_mode {
         let history_hint = if app.search_history.is_empty() {
             String::new()
         } else {
-            format!(" | ↑↓ 历史({} 条)", app.search_history.len())
+            format!(" ({} 历史记录)", app.search_history.len())
         };
-        format!(
-            " 输入: {} | Enter 搜索 | Esc 取消{} ",
-            app.input_buffer, history_hint
-        )
-    } else if matches!(app.status, PlayerStatus::SearchResults) {
-        " ↑↓ 选择 | ←→ 翻页 | Enter 播放 | f 收藏 | F 全部收藏 | Esc 返回 | q 退出 ".to_string()
-    } else if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
-        " Space 暂停/继续 | ←→ 快退/快进 | +/- 音量 | f 收藏 | m 模式 | s 搜索 | q 退出 "
-            .to_string()
+        spans.push(Span::styled(
+            format!(" 输入搜索: {} ", app.input_buffer),
+            Style::default().fg(Color::Yellow),
+        ));
+        add_bind(&mut spans, "Enter", "搜索");
+        if !app.search_history.is_empty() {
+            add_bind(&mut spans, "↑↓", &format!("历史{}", history_hint));
+        }
+        add_bind(&mut spans, "Esc", "取消");
+        theme::COLOR_NEON_CYAN
+    } else if !app.search_results.is_empty() {
+        if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
+            add_bind(&mut spans, "Space", "暂停/继续");
+        }
+        add_bind(&mut spans, "↑↓", "选择");
+        add_bind(&mut spans, "←→", "翻页");
+        add_bind(&mut spans, "Enter", "播放");
+        add_bind(&mut spans, "f", "收藏");
+        add_bind(&mut spans, "F", "全部收藏");
+        add_bind(&mut spans, "Esc", "返回");
+        add_bind(&mut spans, "q", "退出");
+        theme::COLOR_NEON_CYAN
     } else {
-        " s 搜索 | ↑↓ 选曲 | Tab 切换分组 | g 新建 | R 重命名 | D 删除 | M 移动 | Enter 播放 | f 收藏 | m 模式 | q 退出 ".to_string()
+        if matches!(app.status, PlayerStatus::Playing | PlayerStatus::Paused) {
+            add_bind(&mut spans, "Space", "暂停/继续");
+            add_bind(&mut spans, "←→", "快退/快进");
+            add_bind(&mut spans, "+/-", "音量");
+        }
+        add_bind(&mut spans, "s", "搜索");
+        add_bind(&mut spans, "q", "退出");
+        add_bind(&mut spans, "?", "操作帮助");
+        theme::COLOR_NEON_CYAN
     };
 
-    let (border_color, text_color) = if app.delete_confirm_mode {
-        (Color::Red, Color::Red)
-    } else if app.input_mode || app.group_input_mode {
-        (COLOR_NEON_CYAN, Color::Yellow)
-    } else {
-        (COLOR_NEON_CYAN, Color::Reset)
-    };
-
-    let help = Paragraph::new(help_text)
+    let help = Paragraph::new(Line::from(spans))
         .block(
-            Block::default()
-                .borders(Borders::ALL)
+            theme::default_block()
+                .title(" ⌨️ 快捷键 ")
                 .border_style(Style::default().fg(border_color)),
         )
-        .style(Style::default().fg(text_color));
+        .wrap(Wrap { trim: true });
     frame.render_widget(help, area);
 }
 
@@ -359,9 +403,44 @@ pub fn render_move_overlay(app: &App, frame: &mut Frame) {
 
     let popup = List::new(items).block(
         Block::default()
-            .title(format!("移动「{}」到」", item_label))
+            .title(format!("移动「{}」到", item_label))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(COLOR_NEON_PINK)),
+    );
+    frame.render_widget(popup, popup_area);
+}
+
+pub fn render_help_overlay(app: &App, frame: &mut Frame) {
+    if !app.help_mode {
+        return;
+    }
+
+    let help_text = vec![
+        Line::from(Span::styled("【全局操作】", Style::default().fg(theme::COLOR_NEON_PINK).add_modifier(Modifier::BOLD))),
+        Line::from(" [q] 退出程序        [s] 搜索网络歌曲        [?] 打开/关闭帮助        [m] 切换播放模式"),
+        Line::from(""),
+        Line::from(Span::styled("【播放控制】", Style::default().fg(theme::COLOR_NEON_PINK).add_modifier(Modifier::BOLD))),
+        Line::from(" [Space] 暂停/继续   [Enter] 播放选定歌曲    [←/→] 快退/快进      [+/-] 调节音量"),
+        Line::from(""),
+        Line::from(Span::styled("【列表 & 分组】", Style::default().fg(theme::COLOR_NEON_PINK).add_modifier(Modifier::BOLD))),
+        Line::from(" [↑/↓] 上下移动      [Tab/Shift+Tab] 切换上下分组"),
+        Line::from(" [g] 新建分组        [R] 重命名当前分组      [D] 删除当前分组"),
+        Line::from(" [M] 移动当前歌曲    [f] 收藏/取消收藏       [F] 收藏搜索列表所有歌曲"),
+        Line::from(""),
+    ];
+
+    let height = (help_text.len() as u16 + 2).min(frame.size().height);
+    let width = 86u16.min(frame.size().width);
+    let x = (frame.size().width.saturating_sub(width)) / 2;
+    let y = (frame.size().height.saturating_sub(height)) / 2;
+    let popup_area = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let popup = Paragraph::new(help_text).block(
+        theme::default_block()
+            .title(" 全部快捷键说明 ")
+            .border_style(Style::default().fg(theme::COLOR_NEON_CYAN)),
     );
     frame.render_widget(popup, popup_area);
 }

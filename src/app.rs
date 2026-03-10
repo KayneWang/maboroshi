@@ -105,6 +105,8 @@ pub struct App {
     pub delete_confirm_mode: bool,
     /// 是否处于修改分组名称的输入模式
     pub rename_mode: bool,
+    pub help_mode: bool,
+    pub playing_from_search: bool,
     request_seq: u64,
     active_request_id: u64,
     favorites_path: PathBuf,
@@ -259,6 +261,8 @@ impl App {
             move_target_group: 0,
             delete_confirm_mode: false,
             rename_mode: false,
+            help_mode: false,
+            playing_from_search: false,
             request_seq: 0,
             active_request_id: 0,
             favorites_path,
@@ -760,6 +764,14 @@ impl App {
     }
 
     pub fn restore_status_after_search(&mut self) {
+        if matches!(
+            self.status,
+            PlayerStatus::Playing | PlayerStatus::Paused | PlayerStatus::Error(_)
+        ) {
+            self.saved_status = None;
+            return;
+        }
+
         if let Some(saved) = self.saved_status.take() {
             self.status = saved;
         } else {
@@ -852,6 +864,10 @@ impl App {
     // ── 自动播放下一首 ────────────────────────────────────────────────────────
 
     pub fn get_next_song(&mut self) -> Option<(String, Option<String>)> {
+        if self.playing_from_search {
+            return self.get_next_search_result();
+        }
+
         let items = self.active_items();
         match self.play_mode {
             PlayMode::Single => {
@@ -921,6 +937,63 @@ impl App {
                     self.add_log(format!("当前歌曲 '{}' 不在当前分组中", self.current_song));
                 }
                 None
+            }
+        }
+    }
+
+    fn get_next_search_result(&mut self) -> Option<(String, Option<String>)> {
+        let len = self.search_results.len();
+        if len == 0 {
+            return None;
+        }
+
+        match self.play_mode {
+            PlayMode::Single => {
+                if !self.current_song.is_empty() {
+                    Some((self.current_song.clone(), self.current_local_path.clone()))
+                } else {
+                    None
+                }
+            }
+            PlayMode::Shuffle => {
+                let mut idx = self.simple_random(len);
+                if let Some(current_idx) = self
+                    .search_results
+                    .iter()
+                    .position(|item| item.title == self.current_song)
+                {
+                    if len > 1 {
+                        idx = self.simple_random(len - 1);
+                        if idx >= current_idx {
+                            idx += 1;
+                        }
+                    }
+                }
+                self.selected_search_result = idx;
+                Some((self.search_results[idx].title.clone(), None))
+            }
+            PlayMode::ListLoop | PlayMode::Sequential => {
+                let current_song = self.current_song.clone();
+                if let Some(current_idx) = self
+                    .search_results
+                    .iter()
+                    .position(|item| item.title == current_song)
+                {
+                    let next_idx = current_idx + 1;
+                    if next_idx < len {
+                        self.selected_search_result = next_idx;
+                        Some((self.search_results[next_idx].title.clone(), None))
+                    } else if self.play_mode == PlayMode::ListLoop {
+                        self.selected_search_result = 0;
+                        self.add_log("列表循环，回到第一首 (搜索结果)".to_string());
+                        Some((self.search_results[0].title.clone(), None))
+                    } else {
+                        None
+                    }
+                } else {
+                    self.add_log(format!("当前歌曲 '{}' 不在当前搜索结果中", current_song));
+                    None
+                }
             }
         }
     }

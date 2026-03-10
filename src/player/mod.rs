@@ -110,7 +110,7 @@ impl Player {
         if let Some(result) = app_lock.get_selected_search_result() {
             let title = result.title.clone();
             let request_id = app_lock.begin_async_request();
-            app_lock.clear_search_results();
+            app_lock.playing_from_search = true;
             drop(app_lock);
 
             let audio_c = Arc::clone(&self.audio);

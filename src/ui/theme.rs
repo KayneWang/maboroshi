@@ -11,6 +11,7 @@ pub const COLOR_NEON_PINK: Color = Color::Rgb(255, 80, 200);
 pub const COLOR_NEON_GREEN: Color = Color::Rgb(120, 255, 120);
 pub const COLOR_BG_HIGHLIGHT: Color = Color::Rgb(35, 35, 55);
 pub const COLOR_WARNING: Color = Color::Rgb(255, 190, 90);
+pub const COLOR_INACTIVE: Color = Color::Rgb(100, 100, 100);
 
 // ── 通用辅助函数 ──────────────────────────────────────────────────────────────
 
@@ -60,4 +61,11 @@ pub fn make_list_state(selected: usize) -> ListState {
     let mut state = ListState::default();
     state.select(Some(selected));
     state
+}
+
+/// 默认的圆角边框块
+pub fn default_block<'a>() -> ratatui::widgets::Block<'a> {
+    ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
 }

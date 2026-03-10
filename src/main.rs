@@ -215,8 +215,16 @@ async fn main() -> Result<()> {
             }
             if let Event::Key(key) = evt {
                 let mut app_lock = app.lock().await;
+                // ── 帮助说明弹窗模式 ──────────────────────────────────
+                if app_lock.help_mode {
+                    match key.code {
+                        KeyCode::Char('?') | KeyCode::Esc => {
+                            app_lock.help_mode = false;
+                        }
+                        _ => {}
+                    }
                 // ── 删除分组二次确认 ──────────────────────────────────
-                if app_lock.delete_confirm_mode {
+                } else if app_lock.delete_confirm_mode {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             app_lock.delete_confirm_mode = false;
@@ -325,7 +333,7 @@ async fn main() -> Result<()> {
                         }
                         _ => {}
                     }
-                } else if matches!(app_lock.status, PlayerStatus::SearchResults) {
+                } else if !app_lock.search_results.is_empty() {
                     // 搜索结果状态下的键盘操作
                     match key.code {
                         KeyCode::Char('q') => {
@@ -356,12 +364,18 @@ async fn main() -> Result<()> {
                         KeyCode::Left => {
                             pending_action = Some(PendingAction::PrevPage);
                         }
+                        KeyCode::Char(' ') => {
+                            pending_action = Some(PendingAction::TogglePause);
+                        }
                         _ => {}
                     }
                 } else {
                     match key.code {
                         KeyCode::Char('q') => {
                             pending_action = Some(PendingAction::Quit);
+                        }
+                        KeyCode::Char('?') => {
+                            app_lock.help_mode = true;
                         }
                         KeyCode::Char('s') => {
                             app_lock.input_mode = true;
@@ -430,6 +444,7 @@ async fn main() -> Result<()> {
                                 let path = item.local_path.clone();
                                 app_lock.add_log(format!("从收藏播放: {} [{}]", song, source));
                                 app_lock.current_source = source;
+                                app_lock.playing_from_search = false;
                                 pending_action = Some(PendingAction::SearchAndPlay(song, path));
                             }
                         }
