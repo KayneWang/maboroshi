@@ -146,6 +146,8 @@ pub fn render_items(app: &mut App, frame: &mut Frame, area: Rect) {
                     Style::default()
                 };
 
+                let is_fav = app.is_title_in_active_group(&result.title);
+
                 let marker = if is_playing {
                     "▶"
                 } else if is_selected {
@@ -153,7 +155,8 @@ pub fn render_items(app: &mut App, frame: &mut Frame, area: Rect) {
                 } else {
                     " "
                 };
-                let base = format!("{}. {}", i + 1, result.title);
+                let fav_icon = if is_fav { " ♥" } else { "" };
+                let base = format!("{}. {}{}", i + 1, result.title, fav_icon);
 
                 ListItem::new(format!(
                     "{} {}",
@@ -164,13 +167,23 @@ pub fn render_items(app: &mut App, frame: &mut Frame, area: Rect) {
             })
             .collect();
 
+        let title = if app.is_loading_page {
+            format!(
+                " {} 加载中... - 第 {} 页 ",
+                spinner_frame(),
+                app.current_page + 1
+            )
+        } else {
+            format!(
+                " 🎯 搜索结果 ({}) - 第 {} 页 ",
+                app.search_results.len(),
+                app.current_page
+            )
+        };
+
         let search_list = List::new(search_items).block(
             theme::default_block()
-                .title(format!(
-                    " 🎯 搜索结果 ({}) - 第 {} 页 ",
-                    app.search_results.len(),
-                    app.current_page
-                ))
+                .title(title)
                 .border_style(Style::default().fg(theme::COLOR_NEON_PINK)),
         );
 

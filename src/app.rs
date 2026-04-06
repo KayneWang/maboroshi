@@ -629,6 +629,11 @@ impl App {
             .any(|item| item.title == self.current_song)
     }
 
+    /// 检查指定标题是否已在当前激活分组的收藏中
+    pub fn is_title_in_active_group(&self, title: &str) -> bool {
+        self.active_items().iter().any(|item| item.title == title)
+    }
+
     pub fn update_favorite_local_path(&mut self, song: &str, local_path: String) {
         let mut save_needed = false;
         for group in &mut self.groups {
