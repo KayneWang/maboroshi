@@ -116,9 +116,9 @@ impl App {
     // ── 路径工具 ───────────────────────────────────────────────────────────────
 
     fn resolve_favorites_path(configured_path: &str) -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        if configured_path.starts_with('~') {
-            PathBuf::from(configured_path.replacen('~', &home, 1))
+        if let Some(rest) = configured_path.strip_prefix('~') {
+            let rest = rest.strip_prefix(['/', '\\']).unwrap_or(rest);
+            crate::config::home_dir().join(rest)
         } else {
             PathBuf::from(configured_path)
         }

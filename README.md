@@ -44,6 +44,21 @@ maboroshi
 brew install yt-dlp mpv
 ```
 
+### Windows 安装
+
+推荐使用 [Scoop](https://scoop.sh) 或 [winget](https://learn.microsoft.com/windows/package-manager/winget/) 安装依赖：
+
+```powershell
+# Scoop
+scoop install yt-dlp mpv
+
+# 或 winget
+winget install yt-dlp.yt-dlp
+winget install mpv.net
+```
+
+确保 `yt-dlp` 和 `mpv` 在 `%PATH%` 中，并建议在 [Windows Terminal](https://aka.ms/terminal) 下运行以获得正确的 UTF-8 与颜色显示。
+
 ## 🚀 安装
 
 ### 方式 1：下载预编译二进制（推荐）
@@ -87,6 +102,8 @@ cd maboroshi
 # 编译并安装
 cargo install --path .
 ```
+
+> Windows 用户目前推荐此方式：先安装 [Rust 工具链](https://www.rust-lang.org/tools/install)，再执行 `cargo install --path .` 或 `cargo install maboroshi`。暂不提供 Windows 预编译二进制与 `--upgrade` 自动升级，升级请使用 `cargo install --force maboroshi`。
 
 安装后可以直接运行：
 
@@ -181,7 +198,9 @@ maboroshi --help       # 显示帮助信息
 - **收藏列表**: `~/.maboroshi_favorites.json`（含所有分组数据）
 - **离线音频缓存**: `~/.cache/maboroshi/audio/`（用于秒开已播放歌曲）
 - **URL 缓存**: 内存中（重启后清空）
-- **mpv IPC Socket**: `/tmp/maboroshi.sock`（可配置）
+- **mpv IPC 端点**: Unix 下为 `/tmp/maboroshi.sock`，Windows 下为 `\\.\pipe\maboroshi` 命名管道（可配置）
+
+> Windows 下 `~` 会展开为 `%USERPROFILE%`，例如 `C:\Users\<name>\.config\maboroshi\config.toml`、`C:\Users\<name>\.maboroshi_favorites.json`。
 
 ### 🧹 清理音频缓存
 
@@ -251,7 +270,7 @@ Maboroshi 支持所有 yt-dlp 兼容的平台，常用选项包括：
 ### 播放失败
 
 - 确保 `mpv` 已正确安装
-- 检查 `/tmp/maboroshi.sock` 是否被占用
+- 检查 IPC 端点是否被占用：Unix 下为 `/tmp/maboroshi.sock`，Windows 下为 `\\.\pipe\maboroshi`
 - 查看日志区域的错误信息
 
 ### Chrome Cookie 问题
@@ -263,10 +282,12 @@ Maboroshi 支持所有 yt-dlp 兼容的平台，常用选项包括：
 
 ## 📦 支持的平台
 
-| 平台  | 架构                  | 状态    |
-| ----- | --------------------- | ------- |
-| macOS | Apple Silicon (ARM64) | ✅ 支持 |
-| macOS | Intel (x86_64)        | ✅ 支持 |
+| 平台    | 架构                  | 状态                      |
+| ------- | --------------------- | ------------------------- |
+| macOS   | Apple Silicon (ARM64) | ✅ 预编译二进制           |
+| macOS   | Intel (x86_64)        | ✅ 预编译二进制           |
+| Linux   | x86_64                | ✅ 需自行 `cargo install` |
+| Windows | x86_64                | ✅ 需自行 `cargo install` |
 
 ## 🤝 贡献
 
