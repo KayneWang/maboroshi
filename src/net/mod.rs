@@ -6,7 +6,6 @@ pub use ytdlp::SearchResult;
 
 use crate::config::Config;
 use anyhow::Result;
-use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -75,12 +74,10 @@ impl AudioBackend {
     where
         F: FnMut(String),
     {
-        // 清理旧进程和 socket
-        log_fn("清理旧进程和 socket".to_string());
+        // 清理旧进程和 IPC 端点
+        log_fn("清理旧进程和 IPC 端点".to_string());
         self.quit().await;
-        if Path::new(&self.socket_path).exists() {
-            let _ = std::fs::remove_file(&self.socket_path);
-        }
+        mpv::cleanup_ipc_file(&self.socket_path);
 
         let (stream_url, out_local_path) = if let Some(path) = local_path_hint {
             if std::path::Path::new(&path).exists() {
@@ -131,16 +128,16 @@ impl AudioBackend {
             *process_lock = Some(child);
         }
 
-        log_fn("mpv 已启动，等待 socket 就绪...".to_string());
+        log_fn("mpv 已启动，等待 IPC 就绪...".to_string());
 
-        // 等待 socket 文件创建（最多等待 network.play_timeout 秒）
+        // 等待 IPC 端点就绪（最多等待 network.play_timeout 秒）
         let socket_path = self.socket_path.clone();
         let wait_timeout_secs = self.config.network.play_timeout.max(1);
         let max_attempts = (wait_timeout_secs * 10) as usize;
         let mut socket_ready = false;
         for i in 0..max_attempts {
-            if Path::new(&socket_path).exists() {
-                log_fn(format!("socket 就绪 ({}ms)", i * 100));
+            if mpv::ipc_exists(&socket_path) {
+                log_fn(format!("IPC 就绪 ({}ms)", i * 100));
                 socket_ready = true;
                 break;
             }
@@ -148,7 +145,7 @@ impl AudioBackend {
         }
 
         if !socket_ready {
-            log_fn("警告: socket 文件未创建，但继续播放".to_string());
+            log_fn("警告: IPC 端点未就绪，但继续播放".to_string());
         } else {
             // 遵守锁定顺序 (ipc_task → playback_state → mpv_process)
             // 1. 先锁 ipc_task，杀死旧任务
@@ -230,10 +227,10 @@ impl AudioBackend {
             state.progress = 0.0;
         }
 
-        // 3. 优先通过 IPC socket 优雅退出 mpv（不持有任何 Mutex）
+        // 3. 优先通过 IPC 优雅退出 mpv（不持有任何 Mutex）
         let _ = self.send_command(vec!["quit"]).await;
-        // 清理 socket 文件
-        let _ = std::fs::remove_file(&self.socket_path);
+        // 清理 IPC 端点（Unix 下删除 socket 文件；Windows 下为 no-op）
+        mpv::cleanup_ipc_file(&self.socket_path);
 
         // 4. 如果进程还在，通过进程句柄杀掉并等待结束
         let mut process_lock = self.mpv_process.lock().await;
@@ -247,6 +244,7 @@ impl AudioBackend {
 impl Drop for AudioBackend {
     fn drop(&mut self) {
         // 防止程序异常退出时 socket 文件残留，导致下次启动或其他实例出现冲突
-        let _ = std::fs::remove_file(&self.socket_path);
+        // Windows named pipe 随进程结束自动回收，此处为 no-op
+        mpv::cleanup_ipc_file(&self.socket_path);
     }
 }

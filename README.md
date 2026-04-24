@@ -20,6 +20,8 @@ brew install yt-dlp mpv
 maboroshi
 ```
 
+> Windows 用户请参考 [Windows 安装](#windows-安装) 与 [方式 3：从源码编译](#方式-3从源码编译)。
+
 ## ✨ 特性
 
 - 🔍 **多源音乐搜索** - 支持 YouTube、Bilibili 等多个平台搜索并播放音乐
@@ -43,6 +45,32 @@ maboroshi
 ```bash
 brew install yt-dlp mpv
 ```
+
+### Windows 安装
+
+推荐使用 [Scoop](https://scoop.sh) 安装依赖，它会自动把 `mpv.exe` / `yt-dlp.exe` 注册到 `%PATH%`：
+
+```powershell
+# 安装 Scoop（如果没装过）
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+irm get.scoop.sh | iex
+
+# 安装 mpv 和 yt-dlp
+scoop install mpv yt-dlp
+```
+
+> ⚠️ 不建议用 `winget install mpv.net` —— `mpv.net` 是 GUI 前端，不会把命令行 `mpv.exe` 加到 PATH。如果必须用 winget，请选择官方 mpv 源或手动把 `mpv.exe` 所在目录加到 `%PATH%`。
+
+安装完**重新打开 PowerShell** 让 PATH 生效，验证：
+
+```powershell
+mpv --version
+yt-dlp --version
+```
+
+建议在 [Windows Terminal](https://aka.ms/terminal) 下运行以获得正确的 UTF-8 与颜色显示。
+
+> 🛠️ 从源码构建（`cargo install`）时还需要 **Visual Studio Build Tools**（勾选"使用 C++ 的桌面开发"工作负载）才能找到 MSVC linker (`link.exe`)。下载：<https://visualstudio.microsoft.com/visual-cpp-build-tools/>。如果想避免装 VS，也可以切换到 GNU 工具链：`rustup toolchain install stable-x86_64-pc-windows-gnu && rustup default stable-x86_64-pc-windows-gnu`，但需要 `scoop install mingw`。
 
 ## 🚀 安装
 
@@ -88,6 +116,8 @@ cd maboroshi
 cargo install --path .
 ```
 
+> Windows 用户目前推荐此方式：先安装 [Rust 工具链](https://www.rust-lang.org/tools/install)，再执行 `cargo install --path .` 或 `cargo install maboroshi`。暂不提供 Windows 预编译二进制与 `--upgrade` 自动升级，升级请使用 `cargo install --force maboroshi`。
+
 安装后可以直接运行：
 
 ```bash
@@ -101,7 +131,7 @@ maboroshi
 ```bash
 maboroshi              # 启动音乐播放器
 maboroshi --version    # 显示版本信息
-maboroshi --upgrade    # 升级到最新版本
+maboroshi --upgrade    # 升级到最新版本（仅 Unix；Windows 下打印手动升级提示）
 maboroshi --help       # 显示帮助信息
 ```
 
@@ -181,7 +211,9 @@ maboroshi --help       # 显示帮助信息
 - **收藏列表**: `~/.maboroshi_favorites.json`（含所有分组数据）
 - **离线音频缓存**: `~/.cache/maboroshi/audio/`（用于秒开已播放歌曲）
 - **URL 缓存**: 内存中（重启后清空）
-- **mpv IPC Socket**: `/tmp/maboroshi.sock`（可配置）
+- **mpv IPC 端点**: Unix 下为 `/tmp/maboroshi.sock`，Windows 下为 `\\.\pipe\maboroshi` 命名管道（可配置）
+
+> Windows 下 `~` 会展开为 `%USERPROFILE%`，例如 `C:\Users\<name>\.config\maboroshi\config.toml`、`C:\Users\<name>\.maboroshi_favorites.json`。
 
 ### 🧹 清理音频缓存
 
@@ -204,7 +236,8 @@ Maboroshi 支持通过配置文件自定义行为。首次运行时会自动在 
 source = "youtube"
 max_results = 15
 timeout = 30
-cookies_browser = "chrome"
+cookies_browser = "chrome"   # 留空 "" 则不使用浏览器 cookies（Windows 推荐）
+cookies_file = ""            # 预先导出的 cookies.txt 路径，支持 ~ 展开
 
 [cache]
 url_cache_size = 30
@@ -251,7 +284,7 @@ Maboroshi 支持所有 yt-dlp 兼容的平台，常用选项包括：
 ### 播放失败
 
 - 确保 `mpv` 已正确安装
-- 检查 `/tmp/maboroshi.sock` 是否被占用
+- 检查 IPC 端点是否被占用：Unix 下为 `/tmp/maboroshi.sock`，Windows 下为 `\\.\pipe\maboroshi`
 - 查看日志区域的错误信息
 
 ### Chrome Cookie 问题
@@ -261,12 +294,34 @@ Maboroshi 支持所有 yt-dlp 兼容的平台，常用选项包括：
 - Chrome 浏览器已安装
 - 已登录 YouTube 账号
 
+#### Windows 下 Chrome cookie 读取失败
+
+Chrome 127+ 启用了 App-Bound Encryption，yt-dlp 在 Windows 上**无法直接读取 Chrome cookie**，
+表现为搜索失败、日志里出现 `Could not copy Chrome cookie database`（参考
+[yt-dlp#7271](https://github.com/yt-dlp/yt-dlp/issues/7271)）。
+
+解决方式任选其一：
+
+1. **不用 cookies**：把 `config.toml` 里的 `cookies_browser` 改为 `""`（默认已是空值）。对非年龄限制内容足够。
+2. **改用 Firefox**：`cookies_browser = "firefox"`（Firefox 不受 App-Bound Encryption 影响）。
+3. **关闭 Chrome 后再运行**：最省事，但每次都要关。
+4. **给 Chrome 加启动参数**：右键 Chrome 快捷方式 → 属性 → 目标后面追加 ` --disable-features=LockProfileCookieDatabase`，重新启动 Chrome。
+5. **导出 cookies.txt，用 `cookies_file` 指向它**（最稳）：关闭 Chrome 后执行一次
+   `yt-dlp --cookies-from-browser chrome --cookies cookies.txt`，然后在 `config.toml` 里：
+   ```toml
+   [search]
+   cookies_browser = ""
+   cookies_file = "C:/Users/xxx/cookies.txt"
+   ```
+
 ## 📦 支持的平台
 
-| 平台  | 架构                  | 状态    |
-| ----- | --------------------- | ------- |
-| macOS | Apple Silicon (ARM64) | ✅ 支持 |
-| macOS | Intel (x86_64)        | ✅ 支持 |
+| 平台    | 架构                  | 状态                      |
+| ------- | --------------------- | ------------------------- |
+| macOS   | Apple Silicon (ARM64) | ✅ 预编译二进制           |
+| macOS   | Intel (x86_64)        | ✅ 预编译二进制           |
+| Linux   | x86_64                | ✅ 需自行 `cargo install` |
+| Windows | x86_64                | ✅ 需自行 `cargo install` |
 
 ## 🤝 贡献
 

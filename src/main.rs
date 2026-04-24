@@ -10,14 +10,13 @@ use crate::net::AudioBackend;
 use crate::player::Player;
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
 use std::{
     env, io,
-    process::Command,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -80,10 +79,11 @@ fn print_version() {
     println!("maboroshi v{}", VERSION);
 }
 
+#[cfg(unix)]
 fn upgrade() -> Result<()> {
     println!("🔄 正在升级 maboroshi...");
 
-    let status = Command::new("sh")
+    let status = std::process::Command::new("sh")
         .arg("-c")
         .arg(
             "curl -fsSL https://raw.githubusercontent.com/KayneWang/maboroshi/main/install.sh | sh",
@@ -96,6 +96,14 @@ fn upgrade() -> Result<()> {
     } else {
         anyhow::bail!("升级失败")
     }
+}
+
+#[cfg(windows)]
+fn upgrade() -> Result<()> {
+    println!("🪟 Windows 暂不支持自动升级。");
+    println!("请运行 `cargo install --force maboroshi`，");
+    println!("或访问 https://github.com/KayneWang/maboroshi/releases 下载最新版本。");
+    Ok(())
 }
 
 #[tokio::main]
@@ -141,10 +149,10 @@ async fn main() -> Result<()> {
     let (config, config_warn) = Config::load_with_warning();
     let _ = Config::save_example();
 
-    // 动态生成 socket 路径（基于 PID），避免多实例冲突
+    // 动态生成 IPC 端点路径（基于 PID），避免多实例冲突
     let mut config = config;
-    if config.paths.socket_path == "/tmp/maboroshi.sock" {
-        config.paths.socket_path = format!("/tmp/maboroshi-{}.sock", std::process::id());
+    if config.paths.socket_path == config::default_socket_path() {
+        config.paths.socket_path = config::default_socket_path_with_pid(std::process::id());
     }
 
     let app = Arc::new(Mutex::new(App::new(&config.paths.favorites_file)));
@@ -214,6 +222,11 @@ async fn main() -> Result<()> {
                 continue;
             }
             if let Event::Key(key) = evt {
+                // Windows 会同时上报按键的 Press / Release / Repeat；Unix 只报 Press。
+                // 统一只处理 Press 事件，避免按键被重复处理（Windows 上会导致输入翻倍）。
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 let mut app_lock = app.lock().await;
                 // ── 帮助说明弹窗模式 ──────────────────────────────────
                 if app_lock.help_mode {

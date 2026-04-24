@@ -2,6 +2,19 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+/// 返回当前用户的 home 目录。Unix 读 `HOME`，Windows 读 `USERPROFILE`。
+/// 都读不到时回落到当前工作目录（`.`）。
+pub fn home_dir() -> PathBuf {
+    #[cfg(windows)]
+    let key = "USERPROFILE";
+    #[cfg(unix)]
+    let key = "HOME";
+
+    std::env::var_os(key)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -26,6 +39,10 @@ pub struct SearchConfig {
     pub timeout: u64,
     #[serde(default = "default_cookies_browser")]
     pub cookies_browser: String,
+    /// 预先导出的 cookies.txt 文件路径（支持 `~` 展开）。非空时会追加 yt-dlp 的 `--cookies` 参数，
+    /// 可与 `cookies_browser` 同时使用。
+    #[serde(default = "default_cookies_file")]
+    pub cookies_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +97,20 @@ fn default_search_timeout() -> u64 {
 }
 
 fn default_cookies_browser() -> String {
-    "chrome".to_string()
+    // Windows 下 Chrome 127+ 启用 App-Bound Encryption 后 yt-dlp 无法读取 cookie，
+    // 默认留空（不使用 cookies），用户如需访问年龄限制内容可手动改为 firefox。
+    #[cfg(windows)]
+    {
+        String::new()
+    }
+    #[cfg(unix)]
+    {
+        "chrome".to_string()
+    }
+}
+
+fn default_cookies_file() -> String {
+    String::new()
 }
 
 fn default_cache_size() -> usize {
@@ -111,8 +141,27 @@ fn default_volume_step() -> i32 {
     5
 }
 
-fn default_socket_path() -> String {
-    "/tmp/maboroshi.sock".to_string()
+pub fn default_socket_path() -> String {
+    #[cfg(unix)]
+    {
+        "/tmp/maboroshi.sock".to_string()
+    }
+    #[cfg(windows)]
+    {
+        r"\\.\pipe\maboroshi".to_string()
+    }
+}
+
+/// 基于进程 PID 生成的 IPC 端点路径，用于运行时隔离多实例。
+pub fn default_socket_path_with_pid(pid: u32) -> String {
+    #[cfg(unix)]
+    {
+        format!("/tmp/maboroshi-{}.sock", pid)
+    }
+    #[cfg(windows)]
+    {
+        format!(r"\\.\pipe\maboroshi-{}", pid)
+    }
 }
 
 fn default_favorites_file() -> String {
@@ -130,6 +179,7 @@ impl Default for SearchConfig {
             max_results: default_max_results(),
             timeout: default_search_timeout(),
             cookies_browser: default_cookies_browser(),
+            cookies_file: default_cookies_file(),
         }
     }
 }
@@ -174,8 +224,7 @@ impl Default for PathsConfig {
 
 impl Config {
     fn get_config_path() -> PathBuf {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(home).join(".config/maboroshi/config.toml")
+        home_dir().join(".config/maboroshi/config.toml")
     }
 
     #[allow(dead_code)]

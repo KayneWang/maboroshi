@@ -33,21 +33,37 @@ const SEARCH_RESULT_BUFFER: usize = 50;
 
 pub fn get_extended_path() -> String {
     let current_path = std::env::var("PATH").unwrap_or_default();
-    // 如果 PATH 中已经包含 homebrew 路径，直接返回
-    if current_path.contains("/opt/homebrew/bin") || current_path.contains("/usr/local/bin") {
+    // Windows 下 PATH 分隔符是 `;`，Homebrew 路径也不存在，直接原样返回。
+    #[cfg(windows)]
+    {
         return current_path;
     }
-    // 否则补充常见的 Homebrew 路径（开发环境可能需要）
-    format!("/opt/homebrew/bin:/usr/local/bin:{}", current_path)
+    #[cfg(unix)]
+    {
+        // 如果 PATH 中已经包含 homebrew 路径，直接返回
+        if current_path.contains("/opt/homebrew/bin") || current_path.contains("/usr/local/bin") {
+            return current_path;
+        }
+        // 否则补充常见的 Homebrew 路径（开发环境可能需要）
+        format!("/opt/homebrew/bin:/usr/local/bin:{}", current_path)
+    }
 }
 
 pub fn build_ytdlp_command(config: &Config, path: &str) -> Command {
     let mut cmd = Command::new("yt-dlp");
     // 当超时或上层任务被取消时，确保子进程不会残留。
     cmd.kill_on_drop(true);
-    cmd.env("PATH", path)
-        .arg("--cookies-from-browser")
-        .arg(&config.search.cookies_browser);
+    cmd.env("PATH", path);
+    // 空字符串表示不使用 cookies（例如 Windows 下 Chrome 因 App-Bound Encryption 读不到 cookie）
+    if !config.search.cookies_browser.is_empty() {
+        cmd.arg("--cookies-from-browser")
+            .arg(&config.search.cookies_browser);
+    }
+    // 预先导出的 cookies.txt 文件；可与 cookies_browser 同时使用
+    if !config.search.cookies_file.is_empty() {
+        cmd.arg("--cookies")
+            .arg(expand_home(&config.search.cookies_file));
+    }
     cmd
 }
 
@@ -80,11 +96,11 @@ fn is_url(keyword: &str) -> bool {
     keyword.starts_with("http://") || keyword.starts_with("https://")
 }
 
-/// 展开 `~` 为 HOME 目录的绝对路径
+/// 展开 `~` 为 home 目录的绝对路径（Unix 读 HOME，Windows 读 USERPROFILE）
 fn expand_home(path: &str) -> PathBuf {
-    if path.starts_with('~') {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        PathBuf::from(path.replacen('~', &home, 1))
+    if let Some(rest) = path.strip_prefix('~') {
+        let rest = rest.strip_prefix(['/', '\\']).unwrap_or(rest);
+        crate::config::home_dir().join(rest)
     } else {
         PathBuf::from(path)
     }

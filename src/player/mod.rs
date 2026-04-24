@@ -11,10 +11,18 @@ use tokio::task::JoinHandle;
 
 const LOG_CHANNEL_CAPACITY: usize = 256;
 
-/// 创建一个日志丢弃通道（yt-dlp 输出不展示给用户）
-pub(crate) fn spawn_log_forwarder(_app: Arc<Mutex<App>>) -> Sender<String> {
-    let (tx, _rx) = mpsc::channel::<String>(LOG_CHANNEL_CAPACITY);
-    // _rx 被丢弃，所有 yt-dlp 输出静默丢弃
+/// 创建一个日志通道：只把 yt-dlp 的 stderr 行（以 `[yt-dlp]` 开头）转发到 App 日志面板，
+/// 其余内部日志静默丢弃，避免刷屏。
+pub(crate) fn spawn_log_forwarder(app: Arc<Mutex<App>>) -> Sender<String> {
+    let (tx, mut rx) = mpsc::channel::<String>(LOG_CHANNEL_CAPACITY);
+    tokio::spawn(async move {
+        while let Some(log) = rx.recv().await {
+            if log.starts_with("[yt-dlp]") {
+                let mut a = app.lock().await;
+                a.add_log(log);
+            }
+        }
+    });
     tx
 }
 
