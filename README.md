@@ -20,6 +20,8 @@ brew install yt-dlp mpv
 maboroshi
 ```
 
+> Windows 用户请参考 [Windows 安装](#windows-安装) 与 [方式 3：从源码编译](#方式-3从源码编译)。
+
 ## ✨ 特性
 
 - 🔍 **多源音乐搜索** - 支持 YouTube、Bilibili 等多个平台搜索并播放音乐
@@ -129,7 +131,7 @@ maboroshi
 ```bash
 maboroshi              # 启动音乐播放器
 maboroshi --version    # 显示版本信息
-maboroshi --upgrade    # 升级到最新版本
+maboroshi --upgrade    # 升级到最新版本（仅 Unix；Windows 下打印手动升级提示）
 maboroshi --help       # 显示帮助信息
 ```
 
@@ -234,7 +236,8 @@ Maboroshi 支持通过配置文件自定义行为。首次运行时会自动在 
 source = "youtube"
 max_results = 15
 timeout = 30
-cookies_browser = "chrome"
+cookies_browser = "chrome"   # 留空 "" 则不使用浏览器 cookies（Windows 推荐）
+cookies_file = ""            # 预先导出的 cookies.txt 路径，支持 ~ 展开
 
 [cache]
 url_cache_size = 30
