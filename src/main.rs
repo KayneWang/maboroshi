@@ -101,8 +101,8 @@ fn upgrade() -> Result<()> {
 #[cfg(windows)]
 fn upgrade() -> Result<()> {
     println!("🪟 Windows 暂不支持自动升级。");
-    println!("请运行 `cargo install --force maboroshi`，");
-    println!("或访问 https://github.com/KayneWang/maboroshi/releases 下载最新版本。");
+    println!("请访问 https://github.com/KayneWang/maboroshi/releases 下载最新版本，");
+    println!("或在源码目录执行 `git pull && cargo install --path .`。");
     Ok(())
 }
 
