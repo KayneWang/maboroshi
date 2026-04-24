@@ -46,18 +46,29 @@ brew install yt-dlp mpv
 
 ### Windows 安装
 
-推荐使用 [Scoop](https://scoop.sh) 或 [winget](https://learn.microsoft.com/windows/package-manager/winget/) 安装依赖：
+推荐使用 [Scoop](https://scoop.sh) 安装依赖，它会自动把 `mpv.exe` / `yt-dlp.exe` 注册到 `%PATH%`：
 
 ```powershell
-# Scoop
-scoop install yt-dlp mpv
+# 安装 Scoop（如果没装过）
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+irm get.scoop.sh | iex
 
-# 或 winget
-winget install yt-dlp.yt-dlp
-winget install mpv.net
+# 安装 mpv 和 yt-dlp
+scoop install mpv yt-dlp
 ```
 
-确保 `yt-dlp` 和 `mpv` 在 `%PATH%` 中，并建议在 [Windows Terminal](https://aka.ms/terminal) 下运行以获得正确的 UTF-8 与颜色显示。
+> ⚠️ 不建议用 `winget install mpv.net` —— `mpv.net` 是 GUI 前端，不会把命令行 `mpv.exe` 加到 PATH。如果必须用 winget，请选择官方 mpv 源或手动把 `mpv.exe` 所在目录加到 `%PATH%`。
+
+安装完**重新打开 PowerShell** 让 PATH 生效，验证：
+
+```powershell
+mpv --version
+yt-dlp --version
+```
+
+建议在 [Windows Terminal](https://aka.ms/terminal) 下运行以获得正确的 UTF-8 与颜色显示。
+
+> 🛠️ 从源码构建（`cargo install`）时还需要 **Visual Studio Build Tools**（勾选"使用 C++ 的桌面开发"工作负载）才能找到 MSVC linker (`link.exe`)。下载：<https://visualstudio.microsoft.com/visual-cpp-build-tools/>。如果想避免装 VS，也可以切换到 GNU 工具链：`rustup toolchain install stable-x86_64-pc-windows-gnu && rustup default stable-x86_64-pc-windows-gnu`，但需要 `scoop install mingw`。
 
 ## 🚀 安装
 
