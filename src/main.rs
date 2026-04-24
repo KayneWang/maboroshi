@@ -10,7 +10,7 @@ use crate::net::AudioBackend;
 use crate::player::Player;
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode},
+    event::{self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -222,6 +222,11 @@ async fn main() -> Result<()> {
                 continue;
             }
             if let Event::Key(key) = evt {
+                // Windows 会同时上报按键的 Press / Release / Repeat；Unix 只报 Press。
+                // 统一只处理 Press 事件，避免按键被重复处理（Windows 上会导致输入翻倍）。
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 let mut app_lock = app.lock().await;
                 // ── 帮助说明弹窗模式 ──────────────────────────────────
                 if app_lock.help_mode {
