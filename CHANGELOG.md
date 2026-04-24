@@ -2,6 +2,20 @@
 
 所有版本的重要变更都会记录在此文件中。
 
+## [0.1.16] - 2026-04-24
+
+### ✨ 新功能
+
+- **Windows 平台支持**：mpv IPC 改走 Named Pipe，路径适配 `USERPROFILE`，release 流程产出 `maboroshi-windows-x86_64.exe`
+- **`cookies_file` 配置**：支持预先导出的 `cookies.txt`，规避 Windows Chrome 的 App-Bound Encryption 限制
+
+### 🐛 修复
+
+- **Windows 下按键输入翻倍**：仅处理 `KeyEventKind::Press`，修复 `s` 触发搜索后字符又被写入输入框
+- **yt-dlp 错误信息不可见**：将 `[yt-dlp]` stderr 行转发到日志面板，方便排查
+
+---
+
 ## [0.1.15] - 2026-04-06
 
 ### 🐛 修复
