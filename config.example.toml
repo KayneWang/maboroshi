@@ -25,8 +25,25 @@ max_results = 15
 # 搜索超时时间（秒）
 timeout = 30
 
-# Cookie 来源浏览器：chrome, firefox, safari
+# Cookie 来源浏览器：chrome, firefox, safari, edge, brave
+# 留空（""）则不使用 cookies。
+# Windows 注意：Chrome 127+ 启用 App-Bound Encryption 后 yt-dlp 无法读取其 cookie
+# （参考 https://github.com/yt-dlp/yt-dlp/issues/7271）。解决方式任选：
+#   1. 设为 "" 或 "firefox"（Firefox 不受影响）
+#   2. 先关闭 Chrome 再运行 maboroshi
+#   3. 用参数 `--disable-features=LockProfileCookieDatabase` 启动 Chrome
+#   4. 使用下方的 cookies_file 指向预先导出的 cookies.txt
 cookies_browser = "chrome"
+
+# 预先导出的 cookies.txt 文件路径（支持 `~` 展开）
+# 非空时会追加到 yt-dlp 的 `--cookies` 参数，可与 cookies_browser 同时使用。
+# Windows 下最稳的方案（不受 Chrome lock 影响）：
+#   1. 关闭 Chrome，运行一次：
+#        yt-dlp --cookies-from-browser chrome --cookies cookies.txt
+#      生成 cookies.txt
+#   2. 把路径填到这里，例如：
+#        cookies_file = "C:/Users/xxx/cookies.txt"
+cookies_file = ""
 
 [cache]
 # URL 缓存数量（最多缓存多少首歌曲的 URL）

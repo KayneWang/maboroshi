@@ -291,6 +291,26 @@ Maboroshi 支持所有 yt-dlp 兼容的平台，常用选项包括：
 - Chrome 浏览器已安装
 - 已登录 YouTube 账号
 
+#### Windows 下 Chrome cookie 读取失败
+
+Chrome 127+ 启用了 App-Bound Encryption，yt-dlp 在 Windows 上**无法直接读取 Chrome cookie**，
+表现为搜索失败、日志里出现 `Could not copy Chrome cookie database`（参考
+[yt-dlp#7271](https://github.com/yt-dlp/yt-dlp/issues/7271)）。
+
+解决方式任选其一：
+
+1. **不用 cookies**：把 `config.toml` 里的 `cookies_browser` 改为 `""`（默认已是空值）。对非年龄限制内容足够。
+2. **改用 Firefox**：`cookies_browser = "firefox"`（Firefox 不受 App-Bound Encryption 影响）。
+3. **关闭 Chrome 后再运行**：最省事，但每次都要关。
+4. **给 Chrome 加启动参数**：右键 Chrome 快捷方式 → 属性 → 目标后面追加 ` --disable-features=LockProfileCookieDatabase`，重新启动 Chrome。
+5. **导出 cookies.txt，用 `cookies_file` 指向它**（最稳）：关闭 Chrome 后执行一次
+   `yt-dlp --cookies-from-browser chrome --cookies cookies.txt`，然后在 `config.toml` 里：
+   ```toml
+   [search]
+   cookies_browser = ""
+   cookies_file = "C:/Users/xxx/cookies.txt"
+   ```
+
 ## 📦 支持的平台
 
 | 平台    | 架构                  | 状态                      |

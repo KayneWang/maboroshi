@@ -39,6 +39,10 @@ pub struct SearchConfig {
     pub timeout: u64,
     #[serde(default = "default_cookies_browser")]
     pub cookies_browser: String,
+    /// 预先导出的 cookies.txt 文件路径（支持 `~` 展开）。非空时会追加 yt-dlp 的 `--cookies` 参数，
+    /// 可与 `cookies_browser` 同时使用。
+    #[serde(default = "default_cookies_file")]
+    pub cookies_file: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +97,20 @@ fn default_search_timeout() -> u64 {
 }
 
 fn default_cookies_browser() -> String {
-    "chrome".to_string()
+    // Windows 下 Chrome 127+ 启用 App-Bound Encryption 后 yt-dlp 无法读取 cookie，
+    // 默认留空（不使用 cookies），用户如需访问年龄限制内容可手动改为 firefox。
+    #[cfg(windows)]
+    {
+        String::new()
+    }
+    #[cfg(unix)]
+    {
+        "chrome".to_string()
+    }
+}
+
+fn default_cookies_file() -> String {
+    String::new()
 }
 
 fn default_cache_size() -> usize {
@@ -162,6 +179,7 @@ impl Default for SearchConfig {
             max_results: default_max_results(),
             timeout: default_search_timeout(),
             cookies_browser: default_cookies_browser(),
+            cookies_file: default_cookies_file(),
         }
     }
 }

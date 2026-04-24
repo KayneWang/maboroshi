@@ -53,9 +53,17 @@ pub fn build_ytdlp_command(config: &Config, path: &str) -> Command {
     let mut cmd = Command::new("yt-dlp");
     // 当超时或上层任务被取消时，确保子进程不会残留。
     cmd.kill_on_drop(true);
-    cmd.env("PATH", path)
-        .arg("--cookies-from-browser")
-        .arg(&config.search.cookies_browser);
+    cmd.env("PATH", path);
+    // 空字符串表示不使用 cookies（例如 Windows 下 Chrome 因 App-Bound Encryption 读不到 cookie）
+    if !config.search.cookies_browser.is_empty() {
+        cmd.arg("--cookies-from-browser")
+            .arg(&config.search.cookies_browser);
+    }
+    // 预先导出的 cookies.txt 文件；可与 cookies_browser 同时使用
+    if !config.search.cookies_file.is_empty() {
+        cmd.arg("--cookies")
+            .arg(expand_home(&config.search.cookies_file));
+    }
     cmd
 }
 
