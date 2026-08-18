@@ -116,6 +116,63 @@ fn ensure_cache_dir(cache_dir: &str) -> Option<PathBuf> {
     }
 }
 
+/// 检测并清理本地音频缓存目录：
+/// 1. 删除 yt-dlp 下载中断遗留的 `.part` 残留文件；
+/// 2. 若剩余文件总大小超过 `limit_mb`，按修改时间从旧到新删除，直到降到上限内。
+///
+/// `limit_mb` 为 0 表示关闭自动清理。删除失败的文件跳过不中断。
+/// 返回（删除文件数, 释放字节数）。
+pub fn cleanup_audio_cache(cache_dir: &str, limit_mb: u64) -> (usize, u64) {
+    if limit_mb == 0 {
+        return (0, 0);
+    }
+    let dir = expand_home(cache_dir);
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return (0, 0),
+    };
+
+    let mut deleted = 0usize;
+    let mut freed = 0u64;
+    // (路径, 大小, 修改时间)
+    let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        if path.extension().is_some_and(|ext| ext == "part") {
+            if std::fs::remove_file(&path).is_ok() {
+                deleted += 1;
+                freed += meta.len();
+            }
+            continue;
+        }
+        let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        files.push((path, meta.len(), modified));
+    }
+
+    let limit_bytes = limit_mb * 1024 * 1024;
+    let mut total: u64 = files.iter().map(|(_, size, _)| size).sum();
+    if total > limit_bytes {
+        files.sort_by_key(|(_, _, modified)| *modified);
+        for (path, size, _) in files {
+            if total <= limit_bytes {
+                break;
+            }
+            if std::fs::remove_file(&path).is_ok() {
+                deleted += 1;
+                freed += size;
+                total -= size;
+            }
+        }
+    }
+
+    (deleted, freed)
+}
+
 /// 执行 yt-dlp 搜索，返回标题列表。
 /// - 如果 keyword 已是 URL，直接解析为播放列表/单曲，不使用搜索前缀。
 /// - 否则按分页搜索模式执行。
@@ -431,4 +488,101 @@ where
         url: stream_url,
         local_path: generated_local_path,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+    use std::time::{Duration, SystemTime};
+
+    /// 在系统临时目录下创建一个唯一的测试缓存目录。
+    fn temp_cache_dir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("maboroshi-test-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 写入指定大小的文件，并把修改时间设置为 now - age_secs。
+    fn write_file(dir: &PathBuf, name: &str, size: usize, age_secs: u64) {
+        let path = dir.join(name);
+        let mut f = File::create(&path).unwrap();
+        f.write_all(&vec![0u8; size]).unwrap();
+        f.set_modified(SystemTime::now() - Duration::from_secs(age_secs))
+            .unwrap();
+        f.sync_all().unwrap();
+    }
+
+    #[test]
+    fn cleanup_deletes_oldest_files_until_under_limit() {
+        let dir = temp_cache_dir("over-limit");
+        // 3 个 1MB 文件，上限 2MB：应删除最旧的 1 个
+        write_file(&dir, "old.m4a", 1024 * 1024, 300);
+        write_file(&dir, "mid.m4a", 1024 * 1024, 200);
+        write_file(&dir, "new.m4a", 1024 * 1024, 100);
+
+        let (deleted, freed) = cleanup_audio_cache(dir.to_str().unwrap(), 2);
+
+        assert_eq!(deleted, 1);
+        assert_eq!(freed, 1024 * 1024);
+        assert!(!dir.join("old.m4a").exists());
+        assert!(dir.join("mid.m4a").exists());
+        assert!(dir.join("new.m4a").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_is_noop_when_under_limit() {
+        let dir = temp_cache_dir("under-limit");
+        write_file(&dir, "a.m4a", 1024, 100);
+
+        let (deleted, freed) = cleanup_audio_cache(dir.to_str().unwrap(), 500);
+
+        assert_eq!((deleted, freed), (0, 0));
+        assert!(dir.join("a.m4a").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_disabled_when_limit_is_zero() {
+        let dir = temp_cache_dir("disabled");
+        write_file(&dir, "a.m4a", 1024 * 1024, 100);
+        write_file(&dir, "b.part", 1024, 100);
+
+        let (deleted, freed) = cleanup_audio_cache(dir.to_str().unwrap(), 0);
+
+        assert_eq!((deleted, freed), (0, 0));
+        assert!(dir.join("a.m4a").exists());
+        assert!(dir.join("b.part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_removes_part_files_even_under_limit() {
+        let dir = temp_cache_dir("part-files");
+        write_file(&dir, "a.m4a", 1024, 100);
+        write_file(&dir, "b.m4a.part", 2048, 100);
+
+        let (deleted, freed) = cleanup_audio_cache(dir.to_str().unwrap(), 500);
+
+        assert_eq!(deleted, 1);
+        assert_eq!(freed, 2048);
+        assert!(dir.join("a.m4a").exists());
+        assert!(!dir.join("b.m4a.part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_handles_missing_dir_gracefully() {
+        let dir =
+            std::env::temp_dir().join(format!("maboroshi-test-nonexistent-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+
+        let (deleted, freed) = cleanup_audio_cache(dir.to_str().unwrap(), 500);
+
+        assert_eq!((deleted, freed), (0, 0));
+    }
 }

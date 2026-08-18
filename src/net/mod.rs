@@ -2,7 +2,7 @@ mod mpv;
 mod ytdlp;
 
 pub use mpv::{PauseState, PlaybackState};
-pub use ytdlp::SearchResult;
+pub use ytdlp::{cleanup_audio_cache, SearchResult};
 
 use crate::config::Config;
 use anyhow::Result;

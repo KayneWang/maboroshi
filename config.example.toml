@@ -52,6 +52,10 @@ url_cache_size = 30
 # URL 缓存有效期（秒，默认 2 小时）
 url_cache_ttl = 7200
 
+# 本地音频缓存目录大小上限（MB）。启动时后台检测，超限则按最旧未用的文件开始
+# 自动清理，同时清除下载中断遗留的 .part 文件。设为 0 关闭自动清理。
+audio_cache_limit_mb = 500
+
 [network]
 # 播放超时时间（秒）
 play_timeout = 10

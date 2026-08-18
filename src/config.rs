@@ -54,6 +54,9 @@ pub struct CacheConfig {
     /// 是否在播放时于后台缓存音频文件供离线播放
     #[serde(default = "default_offline_audio")]
     pub offline_audio: bool,
+    /// 本地音频缓存目录大小上限（MB），启动时超限会按最旧未用自动清理；0 表示关闭自动清理
+    #[serde(default = "default_audio_cache_limit_mb")]
+    pub audio_cache_limit_mb: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +128,10 @@ fn default_offline_audio() -> bool {
     true
 }
 
+fn default_audio_cache_limit_mb() -> u64 {
+    500
+}
+
 fn default_play_timeout() -> u64 {
     10
 }
@@ -190,6 +197,7 @@ impl Default for CacheConfig {
             url_cache_size: default_cache_size(),
             url_cache_ttl: default_cache_ttl(),
             offline_audio: default_offline_audio(),
+            audio_cache_limit_mb: default_audio_cache_limit_mb(),
         }
     }
 }

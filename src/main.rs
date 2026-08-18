@@ -173,6 +173,28 @@ async fn main() -> Result<()> {
         }
     }
 
+    // 启动时后台检测并清理音频缓存，不阻塞 UI
+    {
+        let app = Arc::clone(&app);
+        let cache_dir = config.paths.cache_dir.clone();
+        let limit_mb = config.cache.audio_cache_limit_mb;
+        tokio::spawn(async move {
+            let result =
+                tokio::task::spawn_blocking(move || net::cleanup_audio_cache(&cache_dir, limit_mb))
+                    .await;
+            if let Ok((deleted, freed)) = result {
+                if deleted > 0 {
+                    let mut app_lock = app.lock().await;
+                    app_lock.add_log(format!(
+                        "🧹 缓存清理：删除 {} 个文件，释放 {:.1}MB",
+                        deleted,
+                        freed as f64 / 1024.0 / 1024.0
+                    ));
+                }
+            }
+        });
+    }
+
     let audio = Arc::new(AudioBackend::new(config.clone()));
     let player = Player::new(Arc::clone(&audio), Arc::clone(&app), config);
 
