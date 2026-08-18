@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Maboroshi (幻) is a terminal-based music player written in Rust. It uses **yt-dlp** for searching/fetching audio from YouTube, Bilibili, and other platforms, and **mpv** for playback via IPC socket. The UI is built with **ratatui** (TUI framework) + **crossterm**.
+Maboroshi (幻) is a terminal-based music player written in Rust. It uses **yt-dlp** for searching/fetching audio from YouTube, Bilibili, and other platforms, and **mpv** for playback via IPC. The UI is built with **ratatui** (TUI framework) + **crossterm**.
 
-The project is primarily documented in Chinese (中文).
+Supports macOS, Linux, and Windows. The project is primarily documented in Chinese (中文), including code comments and user-facing log messages.
 
 ## Build & Development Commands
 
@@ -15,11 +15,13 @@ cargo build              # Build
 cargo run                # Run the TUI player
 cargo fmt                # Format code
 cargo clippy             # Lint
-cargo test               # Run tests
+cargo test               # Run tests (no tests exist yet)
 cargo install --path .   # Install locally
 ```
 
-Runtime dependencies: `yt-dlp` and `mpv` must be installed (`brew install yt-dlp mpv` on macOS).
+Runtime dependencies: `yt-dlp` and `mpv` must be installed (`brew install yt-dlp mpv` on macOS, `scoop install mpv yt-dlp` on Windows). The binary checks for both at startup.
+
+CLI flags: `--version`, `--help`, `--upgrade` (self-upgrade via install.sh on Unix; prints manual-upgrade instructions on Windows).
 
 ## Architecture
 
@@ -29,11 +31,11 @@ The app follows a single-binary async architecture using **tokio**:
 
 - **`src/app.rs`** — Central application state (`App` struct). Holds all UI state: player status, favorites (multi-group), search results with pagination cache, input buffers, search history, play mode, and modal states (help, rename, delete confirm, move). Manages favorites persistence to `~/.maboroshi_favorites.json` with backward-compatible migration from legacy single-list format.
 
-- **`src/config.rs`** — TOML config loading from `~/.config/maboroshi/config.toml`. Sections: `[search]`, `[cache]`, `[network]`, `[playback]`, `[paths]`.
+- **`src/config.rs`** — TOML config loading from `~/.config/maboroshi/config.toml`. Sections: `[search]` (source, max_results, cookies_browser, cookies_file), `[cache]` (URL cache size/TTL, offline_audio toggle, audio_cache_limit_mb auto-cleanup cap), `[network]`, `[playback]`, `[paths]` (socket_path, favorites_file, cache_dir). All fields have serde defaults, so partial configs work. See `config.example.toml` for the full documented reference. Also provides `home_dir()` (reads `HOME` on Unix, `USERPROFILE` on Windows) — use it instead of hardcoding `~` expansion.
 
 - **`src/net/`** — External process integration:
   - `ytdlp.rs` — Wraps yt-dlp CLI for search (paginated) and stream URL resolution. Implements `UrlCache` (LRU with TTL) and offline audio caching to `~/.cache/maboroshi/audio/`.
-  - `mpv.rs` — mpv IPC over Unix socket (`/tmp/maboroshi-<pid>.sock`). Spawns a background task (`spawn_ipc_task`) that reads JSON-based mpv events for progress/pause/volume state.
+  - `mpv.rs` — mpv IPC over Unix socket (Unix) or named pipe (Windows), abstracted behind an `IpcStream` type alias with `#[cfg(unix)]`/`#[cfg(windows)]` variants. Spawns a background task (`spawn_ipc_task`) that reads JSON-based mpv events for progress/pause/volume state.
   - `mod.rs` — `AudioBackend` struct that orchestrates yt-dlp + mpv lifecycle. Lock ordering: `ipc_task → playback_state → mpv_process`.
 
 - **`src/player/`** — High-level playback logic:
@@ -49,9 +51,14 @@ The app follows a single-binary async architecture using **tokio**:
 ## Key Patterns
 
 - **Shared state via `Arc<Mutex<App>>`** — The `App` mutex is held briefly for reads/writes, then released before any async work. The event loop collects a `PendingAction` enum while holding the lock, then processes it after releasing.
-- **mpv communication** — All playback control goes through Unix domain socket IPC, not CLI flags. The socket path includes PID to support multiple instances.
+- **mpv communication** — All playback control goes through IPC (Unix domain socket on Unix, named pipe `\\.\pipe\maboroshi-<pid>` on Windows), not CLI flags. At startup, `main.rs` swaps the platform default path for a per-PID one (`/tmp/maboroshi-<pid>.sock`) to support multiple instances; a user-customized `[paths] socket_path` is used as-is.
+- **Cross-platform code** — Platform differences (IPC transport, home dir, self-upgrade, process spawning) are handled with `#[cfg(unix)]`/`#[cfg(windows)]` blocks in `main.rs`, `config.rs`, `net/mpv.rs`, and `net/ytdlp.rs`. Changes touching these areas must compile for both platforms.
 - **Search pagination** — Results are cached per-page in `App::search_page_cache` (HashMap keyed by page number). Navigation between cached pages is instant.
 
 ## Commit Convention
 
-Uses [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `release:`, etc.
+Uses [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `refactor:`, `docs:`, `chore:`, `release:`, etc. Commit subjects are typically written in Chinese.
+
+## Release Process
+
+A release is a `release: x.y.z` commit bumping the version in `Cargo.toml` and adding a `CHANGELOG.md` entry, followed by pushing a matching git tag — `.github/workflows/release.yml` triggers on the tag and builds prebuilt binaries (macOS aarch64/x86_64, Windows x86_64).
